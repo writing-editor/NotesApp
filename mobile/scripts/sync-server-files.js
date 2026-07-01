@@ -2,8 +2,9 @@ const fs = require('fs');
 const path = require('path');
 const { buildSync } = require('esbuild');
 
-const MOBILE_WWW = path.resolve(__dirname, '../www');
-const APP_CODE = path.resolve(__dirname, '../../AppCode');
+const MOBILE_ROOT = path.resolve(__dirname, '..');
+const MOBILE_WWW  = path.join(MOBILE_ROOT, 'www');
+const APP_CODE    = path.join(MOBILE_ROOT, '../AppCode');
 
 function main() {
   console.log('[Sync] Preparing mobile web assets...');
@@ -19,7 +20,6 @@ function main() {
   });
 
   // 3. Bundle the Mobile Service Worker using ESBuild
-  // This packs LightningFS and Isomorphic-Git into a single file so the browser can run it.
   console.log('[Sync] Bundling Mobile Service Worker...');
   buildSync({
     entryPoints: [path.join(APP_CODE, 'mobile-sw.js')],
@@ -27,7 +27,9 @@ function main() {
     bundle: true,
     minify: true,
     format: 'iife',
-    platform: 'browser'
+    platform: 'browser',
+    // Tell esbuild to look in sibling mobile/node_modules folder for resolving packages
+    nodePaths: [path.join(MOBILE_ROOT, 'node_modules')]
   });
 
   console.log('[Sync] Mobile Web Native environment built successfully!');
