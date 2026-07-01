@@ -3,8 +3,8 @@
   "appName": "Manuscript",
   "webDir": "www",
   "server": {
-    "url": "http://localhost:8723",
-    "cleartext": true
+    "cleartext": true,
+    "allowNavigation": ["localhost", "127.0.0.1"]
   },
   "plugins": {
     "CapacitorNodeJS": {
