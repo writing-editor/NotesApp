@@ -2,14 +2,9 @@
   "appId": "com.yourname.manuscript",
   "appName": "Manuscript",
   "webDir": "www",
-  "server": {
-    "cleartext": true,
-    "allowNavigation": ["localhost", "127.0.0.1"]
-  },
   "plugins": {
-    "CapacitorNodeJS": {
-      "nodeDir": "nodejs",
-      "startMode": "auto"
+    "CapacitorHttp": {
+      "enabled": true
     }
   }
 }

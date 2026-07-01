@@ -130,7 +130,7 @@ function buildTypstDoc(meta, files) {
   return `
 #let c-ink = rgb("#1c1a18")
 #let c-ink-light = rgb("#3a3630")
-#let c-accent = rgb("#7a3525")
+#let c-accent = rgb("#2d5a45")
 #let c-query = rgb("#4a7a9b")
 #let c-ref = rgb("#6a8a3a")
 #let c-todo = rgb("#c47a20")
