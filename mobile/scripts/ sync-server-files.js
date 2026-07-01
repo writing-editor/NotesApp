@@ -1,3 +1,4 @@
+// mobile/scripts/sync-server-files.js
 const fs = require('fs');
 const path = require('path');
 
