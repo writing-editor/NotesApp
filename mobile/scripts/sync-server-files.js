@@ -55,35 +55,42 @@ function main() {
   // 3. Generate inner package.json
   generateNodejsPackageJson();
 
-  // 4. Create the Capacitor Bootloader (solves the race condition)
+ // 4. Create the Capacitor Bootloader (solves the race condition + shows errors)
   const bootloaderHtml = `
   <!DOCTYPE html>
   <html style="background:#f4f2ee; color:#1c1a18; font-family:monospace; padding: 20px;">
   <head><meta name="viewport" content="width=device-width, initial-scale=1.0"></head>
   <body>
   <h3>Starting Manuscript Server...</h3>
-  <p id="log">Waiting for Node.js runtime...</p>
+  <p id="log" style="line-height:1.5;">Waiting for Node.js runtime...</p>
   <script>
     let attempts = 0;
     function ping() {
       attempts++;
       document.getElementById('log').innerText = 'Attempting connection... (' + attempts + ')';
-      // Ping an API route. 400 means "no vault selected", which proves the server is UP.
-      fetch('http://localhost:8723/api/vault')
-        .then(r => {
-          if (r.ok || r.status === 400) {
-            document.getElementById('log').innerText = 'Connected! Loading app...';
-            window.location.href = 'http://localhost:8723/';
-          } else { setTimeout(ping, 250); }
+      
+      fetch('http://127.0.0.1:8723/api/vault')
+        .then(async r => {
+          const data = await r.json().catch(() => ({}));
+          
+          if (data && data.error === 'NODE_CRASH') {
+            // Node crashed! Print the stack trace to the screen.
+            document.getElementById('log').innerHTML = 
+              '<strong style="color:#c0392b">Node.js Crashed:</strong><br><br>' + 
+              data.stack.replace(/\\n/g, '<br>');
+          } else {
+            // Success! Load the app.
+            window.location.href = 'http://127.0.0.1:8723/';
+          }
         })
-        .catch(e => setTimeout(ping, 250));
+        .catch(e => setTimeout(ping, 500));
     }
-    setTimeout(ping, 400); // Give Node a moment to boot before pinging
+    setTimeout(ping, 500);
   </script>
   </body></html>
   `;
   fs.writeFileSync(path.join(WWW, 'index.html'), bootloaderHtml, 'utf8');
-
+  
   console.log('[sync-files] Built bootloader and synced files successfully.');
 }
 

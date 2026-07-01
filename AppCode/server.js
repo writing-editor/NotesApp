@@ -610,14 +610,16 @@ app.get('/api/open-vault', (req, res) => {
 
 
 // ── Start ─────────────────────────────────────────────────────────────────────
-const os = require('os');
 function getLocalIp() {
-  const nets = os.networkInterfaces();
-  for (const name of Object.keys(nets)) {
-    for (const net of nets[name]) {
-      // Skip internal and non-IPv4 addresses
-      if (net.family === 'IPv4' && !net.internal) return net.address;
+  try {
+    const nets = require('os').networkInterfaces();
+    for (const name of Object.keys(nets)) {
+      for (const net of nets[name]) {
+        if (net.family === 'IPv4' && !net.internal) return net.address;
+      }
     }
+  } catch(e) {
+    // Android 10+ blocks this. Ignore and return localhost.
   }
   return 'localhost';
 }
