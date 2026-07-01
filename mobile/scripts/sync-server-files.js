@@ -19,8 +19,19 @@ function main() {
     fs.copyFileSync(path.join(APP_CODE, 'public', file), path.join(MOBILE_WWW, file));
   });
 
+  // 2b. Guard against AppCode/sw.js (the network-passthrough / offline-queue
+  // worker meant for the laptop+real-backend setup) ever being copied
+  // verbatim into www/sw.js instead of the LightningFS-backed mobile-sw.js.
+  // The two workers register on the same scope and look superficially similar,
+  // so a stray `cp sw.js www/sw.js` elsewhere in the pipeline would silently
+  // ship a worker that can never actually clone/write anything on-device.
+  const staleSwPath = path.join(MOBILE_WWW, 'sw.js');
+  if (fs.existsSync(staleSwPath)) {
+    fs.unlinkSync(staleSwPath);
+  }
+
   // 3. Bundle the Mobile Service Worker using ESBuild
-  console.log('[Sync] Bundling Mobile Service Worker...');
+  console.log('[Sync] Bundling Mobile Service Worker (mobile-sw.js)...');
   buildSync({
     entryPoints: [path.join(APP_CODE, 'mobile-sw.js')],
     outfile: path.join(MOBILE_WWW, 'sw.js'),
@@ -28,10 +39,27 @@ function main() {
     minify: true,
     format: 'iife',
     platform: 'browser',
-    // Tell esbuild to look in sibling mobile/node_modules folder for resolving packages
-    nodePaths: [path.join(MOBILE_ROOT, 'node_modules')]
+    nodePaths: [path.join(MOBILE_ROOT, 'node_modules')],
   });
 
+  // 4. Verify the bundle actually contains the LightningFS-backed worker and
+  // not, e.g., an accidental empty/wrong output. Fail the build loudly rather
+  // than shipping an APK that silently can't clone or persist anything.
+  const built = fs.readFileSync(path.join(MOBILE_WWW, 'sw.js'), 'utf8');
+  if (!built.includes('manuscript-fs')) {
+    throw new Error(
+      '[Sync] FATAL: www/sw.js does not reference the LightningFS database ' +
+      '("manuscript-fs"). The wrong service worker may have been bundled — ' +
+      'check that entryPoints points at AppCode/mobile-sw.js, not AppCode/sw.js.'
+    );
+  }
+  if (!built.includes('/api/git/clone')) {
+    throw new Error(
+      '[Sync] FATAL: www/sw.js does not implement /api/git/clone. Aborting build.'
+    );
+  }
+
+  console.log('[Sync] Verified: www/sw.js is the LightningFS mobile worker.');
   console.log('[Sync] Mobile Web Native environment built successfully!');
 }
 
