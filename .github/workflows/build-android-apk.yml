@@ -27,7 +27,7 @@ jobs:
         working-directory: mobile
         env:
           ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
-        run: npm install
+        run: npm install --legacy-peer-deps
 
       - name: Sync server files & generate node package.json
         working-directory: mobile
