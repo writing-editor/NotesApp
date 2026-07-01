@@ -1,0 +1,15 @@
+{
+  "appId": "com.yourname.manuscript",
+  "appName": "Manuscript",
+  "webDir": "www",
+  "server": {
+    "url": "http://localhost:8723",
+    "cleartext": true
+  },
+  "plugins": {
+    "CapacitorNodeJS": {
+      "nodeDir": "nodejs",
+      "startMode": "auto"
+    }
+  }
+}

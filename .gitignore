@@ -1,0 +1,54 @@
+# --- 1. Python & Scripts ---
+__pycache__/
+*.pyc
+*.pyo
+
+# --- 2. LaTeX Build Junk (The "Factory Waste") ---
+# We ignore these because they regenerate every time you compile
+*.aux
+*.log
+*.out
+*.toc
+*.synctex.gz
+*.fls
+*.fdb_latexmk
+*.dvi
+*.lof
+*.lot
+
+# --- 3. The Auto-Generated Intermediate Files ---
+# We ignore the folder where builder.py dumps the converted tex fragments.
+# Why? Because these are duplicates of your Markdown files.
+99_System/tex_build/
+02_Archive
+00_Inbox
+TeachingCourse
+Excalidraw
+The
+
+# --- 4. Obsidian Specifics ---
+# Track your plugins and settings, but ignore your specific window layout
+# (so your mobile layout doesn't overwrite your laptop layout)
+.obsidian/workspace
+.obsidian/workspace.json
+.obsidian/cache
+.obsidian/app.json
+
+# --- 5. OS & Editor Junk ---
+.DS_Store
+Thumbs.db
+.vscode/
+!.vscode/settings.json
+!.vscode/tasks.json
+
+# --- 6. PDF Strategy ---
+# Ignore all PDFs by default (to prevent accidental backup of random downloads)
+*.pdf
+
+# ...BUT, Force-track the final Output PDF
+#!Output/*.pdf
+
+/*.md
+AppCode/node_modules
+book/
+AppCode/package-lock.json

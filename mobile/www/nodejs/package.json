@@ -1,0 +1,13 @@
+{
+  "name": "manuscript-embedded",
+  "version": "1.0.0",
+  "private": true,
+  "main": "index.js",
+  "dependencies": {
+    "chokidar": "^3.6.0",
+    "express": "^5.1.0",
+    "isomorphic-git": "^1.27.1",
+    "marked": "^15.0.12",
+    "ws": "^8.18.2"
+  }
+}

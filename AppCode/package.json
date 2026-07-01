@@ -1,0 +1,20 @@
+{
+  "name": "manuscript",
+  "version": "1.0.0",
+  "description": "Margin-note reading and annotation server for Obsidian manuscripts",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js ../book"
+  },
+    "dependencies": {
+    "@fontsource/dm-mono": "^5.2.7",
+    "@fontsource/eb-garamond": "^5.2.7",
+    "@fontsource/libre-baskerville": "^5.2.10",
+    "chokidar": "^3.6.0",
+    "express": "^5.1.0",
+    "isomorphic-git": "^1.27.0",
+    "marked": "^15.0.12",
+    "puppeteer": "^24.9.0",
+    "ws": "^8.18.2"
+  }
+}
