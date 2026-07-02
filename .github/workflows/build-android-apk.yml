@@ -45,9 +45,17 @@ jobs:
       - name: Install Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Build Capacitor Web assets (ensure www/ exists properly)
+      - name: Ensure Capacitor Android project exists
         working-directory: mobile
-        run: npx cap sync android || npx cap add android
+        run: |
+          if [ ! -f android/gradlew ]; then
+            npx cap add android
+          else
+            npx cap sync android
+          fi
+
+      - name: Overlay custom app icons
+        run: cp -r mobile/icon-assets/. mobile/android/app/src/main/res/
 
       - name: Build debug APK
         working-directory: mobile/android
