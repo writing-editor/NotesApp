@@ -9,7 +9,8 @@
     "@capacitor/android": "^7.0.0",
     "@capacitor/core": "^7.0.0",
     "@isomorphic-git/lightning-fs": "^4.6.0",
-    "isomorphic-git": "^1.27.1"
+    "isomorphic-git": "^1.27.1",
+    "buffer": "^6.0.3"
   },
   "devDependencies": {
     "@capacitor/cli": "^7.0.0",

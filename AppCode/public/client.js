@@ -1244,6 +1244,7 @@ loadManifest();
       const data = await res.json();
       if (!res.ok || data.error) throw new Error(data.error || 'Clone failed');
       statusText.textContent = 'Cloned. Loading vault…';
+      fetch('/api/debug/whoami').then(r=>r.json()).then(d=>{statusText.textContent = JSON.stringify(d);});
       closeSettings();
       loadManifest();
     } catch (e) {

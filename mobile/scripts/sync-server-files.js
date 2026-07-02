@@ -31,6 +31,25 @@ function main() {
   }
 
   // 3. Bundle the Mobile Service Worker using ESBuild
+  //
+  // isomorphic-git and LightningFS both reference the Node `Buffer` global
+  // internally. esbuild's platform:'browser' target does NOT polyfill Node
+  // globals the way webpack does — inside a page context this sometimes gets
+  // masked by an ambient polyfill script tag, but a Service Worker has no
+  // window/global scope to fall back on, so `Buffer` is simply undefined at
+  // runtime. That's the direct cause of "missing buffer dependency" on clone,
+  // and very likely why partially-cloned repos were missing files (the clone
+  // was throwing mid-write, after refs/some blobs but before the full tree).
+  //
+  // Fix: inject the `buffer` npm package's Buffer as a real global via
+  // esbuild's `inject` option, using a tiny shim module so it's attached to
+  // `self` (the Service Worker's global object) before any app code runs.
+  const shimPath = path.join(MOBILE_ROOT, '.buffer-shim.js');
+  fs.writeFileSync(
+    shimPath,
+    `import { Buffer } from 'buffer';\nself.Buffer = self.Buffer || Buffer;\nexport { Buffer };\n`
+  );
+
   console.log('[Sync] Bundling Mobile Service Worker (mobile-sw.js)...');
   buildSync({
     entryPoints: [path.join(APP_CODE, 'mobile-sw.js')],
@@ -39,8 +58,12 @@ function main() {
     minify: true,
     format: 'iife',
     platform: 'browser',
+    define: { global: 'self' }, // some deps also assume Node's `global`
+    inject: [shimPath],
     nodePaths: [path.join(MOBILE_ROOT, 'node_modules')],
   });
+
+  fs.unlinkSync(shimPath);
 
   // 4. Verify the bundle actually contains the LightningFS-backed worker and
   // not, e.g., an accidental empty/wrong output. Fail the build loudly rather
