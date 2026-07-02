@@ -50,5 +50,5 @@ Thumbs.db
 
 /*.md
 AppCode/node_modules
-
+!README.md
 AppCode/package-lock.json
