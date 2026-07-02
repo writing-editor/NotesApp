@@ -1149,7 +1149,15 @@ loadManifest();
         return value || '';
       }
     } catch { /* not set yet or plugin error */ }
-    return '';
+    // FALLBACK: capacitor-secure-storage-plugin is not yet installed in
+    // mobile/package.json, so the branch above never fires on-device today —
+    // it silently returns '' and every push/pull sends an empty token,
+    // producing a 401 from GitHub. Until the plugin is actually added, fall
+    // back to whatever is currently typed into the settings token field so
+    // sync isn't silently broken. This is NOT secure storage (plain DOM
+    // value, not persisted encrypted) — replace this fallback once
+    // capacitor-secure-storage-plugin is installed and wired up for real.
+    return tokenInput ? tokenInput.value.trim() : '';
   }
 
   async function setStoredToken(token) {

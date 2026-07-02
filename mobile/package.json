@@ -11,7 +11,8 @@
     "@isomorphic-git/lightning-fs": "^4.6.0",
     "isomorphic-git": "^1.27.1",
     "buffer": "^6.0.3",
-    "marked": "^15.0.12"
+    "marked": "^15.0.12",
+    "capacitor-secure-storage-plugin": "^0.9.0"
   },
   "devDependencies": {
     "@capacitor/cli": "^7.0.0",
