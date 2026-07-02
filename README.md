@@ -1,4 +1,4 @@
-# Write
+# ManuScript
 
 A markdown-based manuscript reader and margin-note editor. Keep your book as `.md` files in a git repository, read and annotate it from your laptop or your phone, and sync changes via git — no cloud service, no proprietary format.
 
@@ -159,10 +159,7 @@ AppCode/public/*.js,*.html,*.css  ──copy──▶  mobile/www/*
 
 ### App identity
 
-- **App display name:** "Write" (`capacitor.config.json` → `appName`, and Android `res/values/strings.xml` → `app_name`).
-- **Android application ID:** `com.yourname.manuscript` — **intentionally left unchanged** during the rename from "Manuscript" to "Write." Changing the `appId` makes Android treat future builds as a completely different app and would wipe any existing install's local data (including any vault a user has already cloned on their phone). Only change this deliberately, with users warned in advance.
-- **Internal identifiers deliberately left alone:** LightningFS database name (`manuscript-fs`), Service Worker cache names, `BroadcastChannel` name, git commit author fallback string (`'Manuscript'`), and npm package `name` fields. None of these are user-visible, and renaming the LightningFS DB name specifically would orphan any already-cloned vault on an existing install (it would look for a fresh, empty database under a different name).
-
+- **App display name:** "ManuScript" (`capacitor.config.json` → `appName`, and Android `res/values/strings.xml` → `app_name`).
 ### If you're an LLM picking this project back up
 
 Read, in this order:

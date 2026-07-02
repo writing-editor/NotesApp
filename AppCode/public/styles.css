@@ -1225,3 +1225,88 @@
         align-items: flex-end;
       }
     }
+
+/* Minimalist floating slider bar */
+#font-size-slider {
+    -webkit-appearance: none;
+    appearance: none;
+    position: fixed;
+    bottom: 24px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 140px;
+    height: 4px;
+    background: #e2ded9;
+    border-radius: 2px;
+    outline: none;
+    opacity: 0.15;
+    transition: opacity 0.3s ease, background 0.3s ease;
+    z-index: 999;
+    cursor: pointer;
+}
+
+/* Fade in on hover or when being focused/interacted with */
+#font-size-slider:hover,
+#font-size-slider:focus,
+#font-size-slider:active {
+    opacity: 1.0;
+    background: #cdc8be;
+}
+
+/* Custom styling for the slider thumb (handle) - Chrome, Safari, Edge, Opera */
+#font-size-slider::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    background: #7a3525; /* Your manuscript accent color */
+    border: none;
+    transition: transform 0.1s ease;
+}
+
+#font-size-slider::-webkit-slider-thumb:hover {
+    transform: scale(1.25);
+}
+
+/* Custom styling for the slider thumb - Firefox */
+#font-size-slider::-moz-range-thumb {
+    width: 8px;
+    height: 8px;
+    border: none;
+    border-radius: 50%;
+    background: #0b21e6;
+    cursor: pointer;
+    transition: transform 0.1s ease;
+}
+
+#font-size-slider::-moz-range-thumb:hover {
+    transform: scale(1.05);
+}
+
+/* Target the correct elements used in your client.js renderChapter function */
+.main-text,
+.main-text p,
+.main-text .txt-seg,
+.main-text li {
+    font-size: var(--reader-font-size, 17px) !important;
+}
+
+/* File: AppCode/public/styles.css */
+
+/* Scale the margin note content proportionally (approx. 82% of body size) */
+.mn-chip,
+.mn-chip-preview,
+.mn-anchor,
+.note-text,
+#popup-body p {
+    font-size: calc(var(--reader-font-size, 17px) * 0.75) !important;
+    line-height: 1.4 !important;
+}
+
+/* Scale the marker and chip numbers proportionally (approx. 70% of body size) */
+.mn-chip-num,
+.mn-anchor .mn-marker,
+.mn-popup-type {
+    font-size: calc(var(--reader-font-size, 17px) * 0.70) !important;
+}

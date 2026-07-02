@@ -1376,3 +1376,44 @@ loadManifest();
     }
   });
 })();
+
+// ==========================================
+// SEAMLESS FONT SIZE ADJUSTER
+// ==========================================
+(function() {
+    function setupFontSizeSlider() {
+        const slider = document.getElementById('font-size-slider');
+        if (!slider) return;
+
+        // Retrieve saved choice or default to 17px
+        const savedSize = localStorage.getItem('reader-font-size') || '17';
+        slider.value = savedSize;
+        
+        // Apply variable to the root HTML tag so it persists across chapter loads
+        const applyFontSize = (size) => {
+            document.documentElement.style.setProperty('--reader-font-size', `${size}px`);
+        };
+
+        // Set on load
+        applyFontSize(savedSize);
+
+        // Listen for adjustments
+        slider.addEventListener('input', (e) => {
+            const size = e.target.value;
+            applyFontSize(size);
+            localStorage.setItem('reader-font-size', size);
+        });
+    }
+
+    // Try executing immediately
+    setupFontSizeSlider();
+
+    // Fallback if elements aren't parsed by the browser yet
+    if (document.readyState === 'loading') {
+        document.addEventListener('readystatechange', () => {
+            if (document.readyState === 'interactive') {
+                setupFontSizeSlider();
+            }
+        });
+    }
+})();
