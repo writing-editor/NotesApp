@@ -4,6 +4,7 @@ const express  = require('express');
 const http     = require('http');
 const path     = require('path');
 const fs       = require('fs');
+const os       = require('os');
 const chokidar = require('chokidar');
 const WebSocket  = require('ws');
 const { parseMd, countWords } = require('./lib/parse');
