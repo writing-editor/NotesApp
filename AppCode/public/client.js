@@ -186,6 +186,17 @@ async function loadChapter(relPath, updateNav = true) {
     document.getElementById('topbar-chapter').textContent = label;
   }
 
+  // Persist immediately on navigation — previously progress was only ever
+  // saved from the scroll listener, so switching chapters without scrolling
+  // (or closing the app right after opening a chapter) never recorded the
+  // new path at all. scrollTop is 0 here since we haven't rendered yet;
+  // the scroll listener will update it once the reader actually scrolls.
+  fetch('/api/progress', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ path: relPath, scrollTop: 0 }),
+  }).catch(() => {});
+
   const wrap = document.getElementById('page-wrap');
   wrap.innerHTML = '<div class="state-msg">Loading…</div>';
 
@@ -1149,15 +1160,7 @@ loadManifest();
         return value || '';
       }
     } catch { /* not set yet or plugin error */ }
-    // FALLBACK: capacitor-secure-storage-plugin is not yet installed in
-    // mobile/package.json, so the branch above never fires on-device today —
-    // it silently returns '' and every push/pull sends an empty token,
-    // producing a 401 from GitHub. Until the plugin is actually added, fall
-    // back to whatever is currently typed into the settings token field so
-    // sync isn't silently broken. This is NOT secure storage (plain DOM
-    // value, not persisted encrypted) — replace this fallback once
-    // capacitor-secure-storage-plugin is installed and wired up for real.
-    return tokenInput ? tokenInput.value.trim() : '';
+    return '';
   }
 
   async function setStoredToken(token) {
@@ -1355,6 +1358,21 @@ loadManifest();
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible') {
       attemptSilentPullIfConfigured();
+    } else if (document.visibilityState === 'hidden') {
+      // Flush progress immediately when the app is backgrounded/closed.
+      // The scroll listener alone (800ms debounce) misses the common case
+      // of "open a chapter, read without scrolling, switch apps" — nothing
+      // ever fires in that window, so the last-read position silently
+      // reverts to whatever was saved previously (or never saved at all).
+      if (currentPath) {
+        const main = document.getElementById('main');
+        fetch('/api/progress', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ path: currentPath, scrollTop: main ? main.scrollTop : 0 }),
+          keepalive: true, // request must survive the page/worker tearing down
+        }).catch(() => {});
+      }
     }
   });
 })();
