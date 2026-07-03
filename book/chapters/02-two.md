@@ -1,7 +1,7 @@
 # two 
 # ManuScript
 
-A markdown-based manuscript reader and margin-note editor. Keep your book as `.md` files in a git repository, read and annotate it from your laptop or your phone, and sync changes via git — no cloud service, no proprietary format.
+A markdown-based manuscript reader and [mn: this is a note]margin-note editor. Keep your book as `.md` files in a git repository, read and annotate it from your laptop or your phone, and sync changes via git — no cloud service, no proprietary format.
 
 Your writing lives in plain markdown files inside a folder called the **vault** (`book/`), version-controlled with git. The app renders your chapters, lets you click into any paragraph to edit it, and lets you drop margin notes (queries, TODOs, references) anywhere in the text — all stored as plain-text markers directly inside your `.md` files, so nothing is ever locked into a database you can't read yourself.
 
