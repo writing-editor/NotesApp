@@ -49,6 +49,22 @@
     <div class="topbar">
       <button class="topbar-menu" id="topbar-menu" aria-label="Menu">☰</button>
       <span class="topbar-title" id="topbar-chapter"></span>
+      <button class="topbar-edit-toggle" id="topbar-edit-toggle" aria-label="Edit" title="Edit">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg>
+      </button>
+    </div>
+
+    <!-- Mobile edit-mode confirm/cancel bar (replaces desktop Save/Cancel
+         buttons — no keyboard shortcuts on mobile, so check/x icons sit in
+         a fixed bar rather than requiring a scroll back to the top) -->
+    <div class="mobile-edit-bar" id="mobile-edit-bar">
+      <button class="mobile-edit-cancel" id="mobile-edit-cancel" aria-label="Discard changes">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+      </button>
+      <span class="mobile-edit-label">Editing</span>
+      <button class="mobile-edit-save" id="mobile-edit-save" aria-label="Save changes">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
+      </button>
     </div>
 
     <!-- Page content -->

@@ -51,7 +51,12 @@ async function commitFile({ dir, filepath, authorName, authorEmail, message }) {
 // point 3 explicitly allows this to be broader than the scoped auto-commit above).
 async function commitAll({ dir, authorName, authorEmail, message }) {
   const matrix = await git.statusMatrix({ fs, dir });
-  const changed = matrix.filter(([, head, workdir, stage]) => head !== workdir || workdir !== stage);
+  // _progress.json is per-device scroll-position telemetry, rewritten on
+  // every scroll — it must never be staged/committed, or every Push would
+  // carry a noise commit even when the user made no actual edits.
+  const changed = matrix.filter(([filepath, head, workdir, stage]) =>
+    (head !== workdir || workdir !== stage) && !filepath.endsWith('_progress.json')
+  );
   for (const [filepath] of changed) {
     await git.add({ fs, dir, filepath });
   }

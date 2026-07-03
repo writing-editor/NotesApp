@@ -411,7 +411,9 @@ app.post('/api/chapter', (req, res) => {
     fs.writeFileSync(full, initialContent, 'utf8');
 
     const relPath = section + '/' + filename;
-    autoCommit(relPath, `Add ${relPath}`);
+    // No autoCommit — new files are staged and only committed in bulk when
+    // the user presses Push (see commitAll inside gitSync.push). Committing
+    // on every write polluted git history with one commit per edit/note/doc.
 
     res.json({ ok: true, path: relPath, label: cleanTitle });
   } catch (e) {
@@ -502,7 +504,7 @@ app.put('/api/block', (req, res) => {
     const tmp     = full + '.tmp';
     fs.writeFileSync(tmp, updated, 'utf8');
     fs.renameSync(tmp, full);
-    autoCommit(relNorm, `Edit paragraph in ${relNorm}`);
+    // No autoCommit — staged only; committed in bulk on Push.
     res.json({ ok: true });
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -545,7 +547,9 @@ app.put('/api/raw', (req, res) => {
     const tmp = full + '.tmp';
     fs.writeFileSync(tmp, updated, 'utf8');
     fs.renameSync(tmp, full);
-    autoCommit(relNorm, `Edit ${relNorm}`);
+    // No autoCommit — staged only; committed in bulk on Push (see
+    // gitSync.push's internal commitAll call). Committing on every save
+    // previously polluted git history with one commit per edit session.
     res.json({ ok: true });
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -569,7 +573,7 @@ app.post('/api/note', (req, res) => {
 
   try {
     writeNote(full, charPos, noteText, noteType || null);
-    autoCommit(relNorm, `Add note: "${String(noteText).slice(0, 40)}"`);
+    // No autoCommit — staged only; committed in bulk on Push.
     res.json({ ok: true });
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -590,7 +594,7 @@ app.delete('/api/note', (req, res) => {
 
   try {
     deleteNote(full, noteId, charPos);
-    autoCommit(rel, 'Remove note');
+    // No autoCommit — staged only; committed in bulk on Push.
     res.json({ ok: true });
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -628,7 +632,7 @@ app.patch('/api/note', (req, res) => {
     const tmp = full + '.tmp';
     fs.writeFileSync(tmp, updated, 'utf8');
     fs.renameSync(tmp, full);
-    autoCommit(rel, `Retype note to ${newType || 'note'}`);
+    // No autoCommit — staged only; committed in bulk on Push.
     res.json({ ok: true });
   } catch (e) {
     res.status(500).json({ error: e.message });

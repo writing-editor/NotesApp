@@ -374,16 +374,20 @@ async function enterDocEditMode() {
   if (!res.ok) return;
   const { raw } = await res.json();
 
-  const mainText   = document.getElementById('main-text');
-  const editorWrap = document.getElementById('editor-wrap');
-  const mount      = document.getElementById('editor-mount');
-  const toggleBtn  = document.getElementById('edit-mode-toggle');
+  const mainText     = document.getElementById('main-text');
+  const editorWrap    = document.getElementById('editor-wrap');
+  const mount         = document.getElementById('editor-mount');
+  const toggleBtn      = document.getElementById('edit-mode-toggle');
+  const topbarToggle    = document.getElementById('topbar-edit-toggle');
+  const mobileEditBar   = document.getElementById('mobile-edit-bar');
   if (!mainText || !editorWrap || !mount) return;
 
   mainText.style.display  = 'none';
   editorWrap.style.display = 'block';
   toggleBtn.classList.add('active');
   toggleBtn.querySelector('span').textContent = 'Viewing…';
+  if (topbarToggle) topbarToggle.classList.add('active');
+  if (mobileEditBar) mobileEditBar.classList.add('open');
   docModeActive = true;
 
   // Selection-driven note tooltip doesn't apply while editing raw markdown
@@ -414,8 +418,11 @@ function onDocEditClickAway(e) {
   if (editorWrap.contains(e.target)) return;
   // Clicking the Edit/Viewing toggle button itself is handled by its own
   // click listener (which calls exitDocEditMode(true) already) — ignore
-  // here to avoid a double save.
+  // here to avoid a double save. Same for the mobile topbar toggle and the
+  // mobile check/x save-bar, which have their own explicit handlers below.
   if (e.target.closest('#edit-mode-toggle')) return;
+  if (e.target.closest('#topbar-edit-toggle')) return;
+  if (e.target.closest('#mobile-edit-bar')) return;
   exitDocEditMode(true);
 }
 
@@ -425,9 +432,11 @@ async function exitDocEditMode(save) {
   document.removeEventListener('mousedown', onDocEditClickAway, { capture: true });
 
   const text = cmEditor.getDoc();
-  const editorWrap = document.getElementById('editor-wrap');
-  const mainText   = document.getElementById('main-text');
-  const toggleBtn  = document.getElementById('edit-mode-toggle');
+  const editorWrap    = document.getElementById('editor-wrap');
+  const mainText      = document.getElementById('main-text');
+  const toggleBtn      = document.getElementById('edit-mode-toggle');
+  const topbarToggle    = document.getElementById('topbar-edit-toggle');
+  const mobileEditBar   = document.getElementById('mobile-edit-bar');
 
   cmEditor.destroy();
   cmEditor = null;
@@ -439,6 +448,8 @@ async function exitDocEditMode(save) {
     toggleBtn.classList.remove('active');
     toggleBtn.querySelector('span').textContent = 'Edit';
   }
+  if (topbarToggle) topbarToggle.classList.remove('active');
+  if (mobileEditBar) mobileEditBar.classList.remove('open');
 
   if (save) {
     await fetch('/api/raw', {
@@ -452,6 +463,16 @@ async function exitDocEditMode(save) {
     await silentRefresh();
   }
 }
+
+// Mobile topbar edit toggle — same enter/exit functions as desktop
+document.getElementById('topbar-edit-toggle')?.addEventListener('click', () => {
+  docModeActive ? exitDocEditMode(true) : enterDocEditMode();
+});
+
+// Mobile check/x save-bar — icon-only equivalents of desktop's
+// click-away/Ctrl+Enter/Escape, since mobile has neither.
+document.getElementById('mobile-edit-save')?.addEventListener('click', () => exitDocEditMode(true));
+document.getElementById('mobile-edit-cancel')?.addEventListener('click', () => exitDocEditMode(false));
 
 // ── Inline paragraph editing ─────────────────────────────────────────────────
 function setupInlineEditing() {

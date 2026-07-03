@@ -208,7 +208,69 @@
       letter-spacing: 0.1em;
       text-transform: uppercase;
       color: var(--ink-faint);
+      flex: 1;
     }
+
+    /* ── Mobile edit toggle (topbar, floats via position:sticky on .topbar) ── */
+    .topbar-edit-toggle {
+      display: none; /* shown only on mobile, see media query */
+      align-items: center;
+      justify-content: center;
+      width: 30px;
+      height: 30px;
+      border: none;
+      background: none;
+      color: var(--ink-light);
+      cursor: pointer;
+      border-radius: 6px;
+      flex-shrink: 0;
+      transition: background 0.15s, color 0.15s;
+    }
+    .topbar-edit-toggle svg { width: 16px; height: 16px; }
+    .topbar-edit-toggle:active { background: rgba(0,0,0,0.08); }
+    .topbar-edit-toggle.active { color: var(--accent); background: rgba(0,0,0,0.05); }
+
+    /* ── Mobile edit-mode save/cancel bar ── */
+    /* Sits fixed at the top-center while editing — icon-only check/x, no
+       reliance on keyboard shortcuts (mobile has none) and no need to
+       scroll back up on a long chapter. Desktop keeps click-away + Ctrl+Enter/Esc. */
+    .mobile-edit-bar {
+      display: none;
+      align-items: center;
+      justify-content: center;
+      gap: 1.1rem;
+      position: fixed;
+      top: 0.6rem;
+      left: 50%;
+      transform: translateX(-50%);
+      background: var(--paper);
+      border: 1px solid var(--rule);
+      border-radius: 20px;
+      padding: 0.4rem 0.9rem;
+      box-shadow: 0 3px 14px rgba(0,0,0,0.14);
+      z-index: 60;
+    }
+    .mobile-edit-bar.open { display: flex; }
+    .mobile-edit-label {
+      font-family: var(--font-ui);
+      font-size: 0.55rem;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: var(--ink-faint);
+    }
+    .mobile-edit-cancel, .mobile-edit-save {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 26px;
+      height: 26px;
+      border-radius: 50%;
+      border: none;
+      cursor: pointer;
+    }
+    .mobile-edit-cancel svg, .mobile-edit-save svg { width: 15px; height: 15px; }
+    .mobile-edit-cancel { background: rgba(0,0,0,0.06); color: var(--ink-light); }
+    .mobile-edit-save   { background: var(--accent); color: var(--paper); }
 
     /* ── Page layout ── */
     .page-wrap {
@@ -953,6 +1015,8 @@
       .sidebar-overlay.open { display: block; }
 
       .topbar { display: flex; }
+      .topbar-edit-toggle { display: flex; }
+      .edit-mode-toggle { display: none; } /* replaced by topbar-edit-toggle on mobile */
 
       .page-wrap {
         grid-template-columns: 1fr;

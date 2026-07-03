@@ -15,7 +15,7 @@ function main() {
   }
 
   // 2. Copy the Frontend UI exactly as it is
-  ['index.html', 'styles.css', 'client.js'].forEach((file) => {
+  ['index.html', 'styles.css', 'client.js', 'mn-editor.bundle.js'].forEach((file) => {
     fs.copyFileSync(path.join(APP_CODE, 'public', file), path.join(MOBILE_WWW, file));
   });
 

@@ -31,7 +31,7 @@ const BOOK_PREFIX = 'book/';
 
 // ── Service Worker asset caching ────────────────────────────────────────
 const CACHE_NAME = 'manuscript-mobile-v1';
-const STATIC_ASSETS = ['/', '/index.html', '/styles.css', '/client.js'];
+const STATIC_ASSETS = ['/', '/index.html', '/styles.css', '/client.js', '/mn-editor.bundle.js'];
 
 self.addEventListener('install', (e) => {
   self.skipWaiting();
@@ -201,12 +201,109 @@ async function handleApiRequest(req, url) {
       const updated = raw.slice(0, start) + text.trimEnd() + raw.slice(end);
       await pfs.writeFile(fullPath, updated, 'utf8');
 
-      await autoCommit(normPath, `Edit paragraph in ${normPath}`).catch((e) =>
-        console.error('[git] auto-commit failed (non-fatal):', e.message)
-      );
-
+      // No autoCommit — staged only; committed in bulk on Push.
       new BroadcastChannel('manuscript-events').postMessage({ type: 'file-changed', path: normPath });
       return jsonResponse({ ok: true });
+    }
+
+    // ── Whole-file raw markdown (CodeMirror full-chapter edit mode) ─────
+    // Mirrors server.js's /api/raw exactly, backed by LightningFS instead
+    // of the real filesystem. Previously missing here entirely, which is
+    // why edit mode silently failed to open on mobile/mobile-web.
+    if (path === '/api/raw' && method === 'GET') {
+      const relParam = url.searchParams.get('path');
+      if (!relParam) return jsonResponse({ error: 'path required' }, 400);
+      const relPath = decodeURIComponent(relParam).replace(/\\/g, '/');
+      const full = `${VAULT}/${relPath}`;
+      try {
+        const raw = await pfs.readFile(full, 'utf8');
+        return jsonResponse({ raw });
+      } catch {
+        return jsonResponse({ error: 'not found' }, 404);
+      }
+    }
+
+    if (path === '/api/raw' && method === 'PUT') {
+      const { path: relPath, text } = await req.json();
+      if (!relPath || text === undefined) return jsonResponse({ error: 'path, text required' }, 400);
+      const normPath = relPath.replace(/\\/g, '/');
+      const full = `${VAULT}/${normPath}`;
+      try {
+        await pfs.readFile(full, 'utf8'); // confirm it exists, matches server.js 404 behavior
+      } catch {
+        return jsonResponse({ error: 'not found' }, 404);
+      }
+      try {
+        const updated = text.endsWith('\n') ? text : text + '\n';
+        await pfs.writeFile(full, updated, 'utf8');
+        // NOTE: no autoCommit here — edits are staged on save and only
+        // committed in bulk when the user presses Push (see commitAll call
+        // inside push()). Committing on every keystroke/save polluted the
+        // git history with one commit per edit session.
+        new BroadcastChannel('manuscript-events').postMessage({ type: 'file-changed', path: normPath });
+        return jsonResponse({ ok: true });
+      } catch (e) {
+        return jsonResponse({ error: e.message }, 500);
+      }
+    }
+
+    // ── Create a new document from the UI ───────────────────────────────
+    // Mirrors server.js's POST /api/chapter exactly, backed by LightningFS.
+    // Previously missing here entirely — "New document" on mobile/mobile-web
+    // had no route to hit and surfaced as "not implemented".
+    if (path === '/api/chapter' && method === 'POST') {
+      const { section, title } = await req.json() || {};
+      const allowedSections = ['front', 'chapters', 'back'];
+      if (!allowedSections.includes(section)) {
+        return jsonResponse({ error: 'section must be one of front, chapters, back' }, 400);
+      }
+      const cleanTitle = (title || 'Untitled').trim().slice(0, 120);
+      if (!cleanTitle) return jsonResponse({ error: 'title required' }, 400);
+
+      const dir = `${VAULT}/${section}`;
+      try {
+        await pfs.mkdir(dir).catch(() => {}); // LightningFS mkdir has no {recursive:true}; ignore "already exists"
+
+        const slug = cleanTitle
+          .toLowerCase()
+          .replace(/[^a-z0-9\s-]/g, '')
+          .trim()
+          .replace(/\s+/g, '-') || 'untitled';
+
+        let existing = [];
+        try { existing = await pfs.readdir(dir); } catch { /* dir just created, empty */ }
+        const mdFiles = existing.filter((f) => f.endsWith('.md'));
+        const maxPrefix = mdFiles.reduce((max, f) => {
+          const m = f.match(/^(\d+)-/);
+          return m ? Math.max(max, parseInt(m[1], 10)) : max;
+        }, 0);
+        const prefix = String(maxPrefix + 1).padStart(2, '0');
+
+        let filename = `${prefix}-${slug}.md`;
+        let full = `${dir}/${filename}`;
+        let n = 2;
+        // eslint-disable-next-line no-constant-condition
+        while (true) {
+          try {
+            await pfs.stat(full);
+            filename = `${prefix}-${slug}-${n}.md`;
+            full = `${dir}/${filename}`;
+            n++;
+          } catch {
+            break; // stat threw — path free
+          }
+        }
+
+        const initialContent = `# ${cleanTitle}\n\n`;
+        await pfs.writeFile(full, initialContent, 'utf8');
+
+        const relPath = `${section}/${filename}`;
+        // No autoCommit — same reasoning as /api/raw PUT above; new files
+        // are staged and picked up by the next Push's commitAll.
+        return jsonResponse({ ok: true, path: relPath, label: cleanTitle });
+      } catch (e) {
+        return jsonResponse({ error: e.message }, 500);
+      }
     }
 
     // ── Add a note ──────────────────────────────────────────────────────
@@ -220,9 +317,7 @@ async function handleApiRequest(req, url) {
 
       try {
         await writeNote(full, charPos, noteText, noteType || null);
-        await autoCommit(normPath, `Add note: "${String(noteText).slice(0, 40)}"`).catch((e) =>
-          console.error('[git] auto-commit failed (non-fatal):', e.message)
-        );
+        // No autoCommit — staged only; committed in bulk on Push.
         return jsonResponse({ ok: true });
       } catch (e) {
         return jsonResponse({ error: e.message }, 500);
@@ -238,9 +333,7 @@ async function handleApiRequest(req, url) {
 
       try {
         await deleteNote(full, noteId, charPos);
-        await autoCommit(normPath, 'Remove note').catch((e) =>
-          console.error('[git] auto-commit failed (non-fatal):', e.message)
-        );
+        // No autoCommit — staged only; committed in bulk on Push.
         return jsonResponse({ ok: true });
       } catch (e) {
         return jsonResponse({ error: e.message }, 500);
@@ -270,9 +363,7 @@ async function handleApiRequest(req, url) {
         const updated = raw.slice(0, best.index) + newMarker + raw.slice(best.index + best.full.length);
         await pfs.writeFile(full, updated, 'utf8');
 
-        await autoCommit(normPath, `Retype note to ${newType || 'note'}`).catch((e) =>
-          console.error('[git] auto-commit failed (non-fatal):', e.message)
-        );
+        // No autoCommit — staged only; committed in bulk on Push.
         return jsonResponse({ ok: true });
       } catch (e) {
         return jsonResponse({ error: e.message }, 500);
@@ -544,7 +635,12 @@ async function autoCommit(vaultRelativePath, message) {
 async function commitAll(authorName, authorEmail, message) {
   if (!(await isGitRepo())) return { ok: false, reason: 'error', message: 'not a git repository' };
   const matrix = await git.statusMatrix({ fs, dir: GIT_ROOT });
-  const changed = matrix.filter(([, head, workdir, stage]) => head !== workdir || workdir !== stage);
+  // _progress.json is per-device scroll-position telemetry, rewritten on
+  // every scroll — it must never be staged/committed, or every Push would
+  // carry a noise commit even when the user made no actual edits.
+  const changed = matrix.filter(([filepath, head, workdir, stage]) =>
+    (head !== workdir || workdir !== stage) && !filepath.endsWith('_progress.json')
+  );
   for (const [filepath] of changed) {
     await git.add({ fs, dir: GIT_ROOT, filepath });
   }
