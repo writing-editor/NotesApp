@@ -361,6 +361,64 @@ app.get('/api/manifest', (req, res) => {
   res.json(buildManifest());
 });
 
+// Create a new chapter/document from the UI, so the person never has to
+// leave the app (or go into Obsidian) to add a file to the manuscript.
+// section: 'front' | 'chapters' | 'back' — maps directly to the vault subdir.
+app.post('/api/chapter', (req, res) => {
+  if (!VAULT) return res.status(400).json({ error: 'No vault selected' });
+  const { section, title } = req.body || {};
+  const allowedSections = ['front', 'chapters', 'back'];
+  if (!allowedSections.includes(section)) {
+    return res.status(400).json({ error: 'section must be one of front, chapters, back' });
+  }
+  const cleanTitle = (title || 'Untitled').trim().slice(0, 120);
+  if (!cleanTitle) return res.status(400).json({ error: 'title required' });
+
+  const dir = path.join(VAULT, section);
+  try {
+    fs.mkdirSync(dir, { recursive: true });
+
+    // Slugify for the filename, keep spaces->dashes but preserve original
+    // casing in the H1 / manifest label (label derivation strips dashes
+    // back to spaces, same as buildManifest already does for existing files).
+    const slug = cleanTitle
+      .toLowerCase()
+      .replace(/[^a-z0-9\s-]/g, '')
+      .trim()
+      .replace(/\s+/g, '-') || 'untitled';
+
+    // Numeric prefix keeps ordering consistent with existing files in this
+    // section (buildManifest sorts by filename), matching the convention
+    // already used by "01-chapter One.md".
+    const existing = fs.readdirSync(dir).filter(f => f.endsWith('.md'));
+    const maxPrefix = existing.reduce((max, f) => {
+      const m = f.match(/^(\d+)-/);
+      return m ? Math.max(max, parseInt(m[1], 10)) : max;
+    }, 0);
+    const prefix = String(maxPrefix + 1).padStart(2, '0');
+
+    let filename = `${prefix}-${slug}.md`;
+    let full = path.join(dir, filename);
+    // Guard against collisions (e.g. duplicate titles)
+    let n = 2;
+    while (fs.existsSync(full)) {
+      filename = `${prefix}-${slug}-${n}.md`;
+      full = path.join(dir, filename);
+      n++;
+    }
+
+    const initialContent = `# ${cleanTitle}\n\n`;
+    fs.writeFileSync(full, initialContent, 'utf8');
+
+    const relPath = section + '/' + filename;
+    autoCommit(relPath, `Add ${relPath}`);
+
+    res.json({ ok: true, path: relPath, label: cleanTitle });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // Render a chapter
 app.get('/api/chapter', (req, res) => {
   if (!VAULT) return res.status(400).json({ error: 'No vault selected' });
@@ -445,6 +503,49 @@ app.put('/api/block', (req, res) => {
     fs.writeFileSync(tmp, updated, 'utf8');
     fs.renameSync(tmp, full);
     autoCommit(relNorm, `Edit paragraph in ${relNorm}`);
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Whole-file raw markdown — used by the full-chapter CodeMirror edit mode.
+// Unlike /api/block, this reads/writes the entire file as one string, so a
+// single edit session can touch multiple paragraphs without the old
+// one-block-at-a-time constraint.
+app.get('/api/raw', (req, res) => {
+  if (!VAULT) return res.status(400).json({ error: 'No vault selected' });
+  const { path: rel } = req.query;
+  if (!rel) return res.status(400).json({ error: 'path required' });
+
+  const relNorm  = rel.replace(/\\/g, '/');
+  const full     = path.join(VAULT, relNorm);
+  const resolved = path.resolve(full);
+  if (!resolved.startsWith(path.resolve(VAULT))) return res.status(403).json({ error: 'forbidden' });
+  if (!fs.existsSync(full)) return res.status(404).json({ error: 'not found' });
+
+  const raw = fs.readFileSync(full, 'utf8');
+  res.json({ raw });
+});
+
+app.put('/api/raw', (req, res) => {
+  if (!VAULT) return res.status(400).json({ error: 'No vault selected' });
+  const { path: rel, text } = req.body;
+  if (!rel || text === undefined) return res.status(400).json({ error: 'path, text required' });
+
+  const relNorm  = rel.replace(/\\/g, '/');
+  const full     = path.join(VAULT, relNorm);
+  const resolved = path.resolve(full);
+  if (!resolved.startsWith(path.resolve(VAULT))) return res.status(403).json({ error: 'forbidden' });
+  if (!fs.existsSync(full)) return res.status(404).json({ error: 'not found' });
+
+  try {
+    // Preserve a single trailing newline convention, same as block saves.
+    const updated = text.endsWith('\n') ? text : text + '\n';
+    const tmp = full + '.tmp';
+    fs.writeFileSync(tmp, updated, 'utf8');
+    fs.renameSync(tmp, full);
+    autoCommit(relNorm, `Edit ${relNorm}`);
     res.json({ ok: true });
   } catch (e) {
     res.status(500).json({ error: e.message });

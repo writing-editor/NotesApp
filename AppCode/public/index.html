@@ -15,6 +15,9 @@
 
   <!-- Sidebar -->
   <nav class="sidebar" id="sidebar">
+    <button class="sidebar-collapse-btn" id="sidebar-collapse-btn" title="Collapse sidebar (Ctrl+\)">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"></polyline></svg>
+    </button>
     <div class="sidebar-head">
       <div class="sidebar-title">Manuscript</div>
       <div class="sidebar-book" id="book-title">Loading…</div>
@@ -34,6 +37,10 @@
   </nav>
 
   <div class="sidebar-overlay" id="sidebar-overlay"></div>
+
+  <button class="sidebar-expand-btn" id="sidebar-expand-btn" title="Show sidebar (Ctrl+\)">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"></polyline></svg>
+  </button>
 
   <!-- Main -->
   <div class="main" id="main">
@@ -71,8 +78,7 @@
 
 <!-- Selection tooltip -->
 <div class="sel-tooltip" id="sel-tooltip">
-  <span id="tt-add-note" style="cursor:pointer; padding-right:8px; border-right:1px solid rgba(255,255,255,0.3); margin-right:8px;">+note</span>
-  <span id="tt-edit-para" style="cursor:pointer;">✎ Edit</span>
+  <span id="tt-add-note" style="cursor:pointer;">+ note</span>
 </div>
 
 <!-- Note input sheet -->
@@ -90,6 +96,24 @@
     <button class="note-type-btn" data-type="todo">todo</button>
   </div>
   <textarea id="sheet-input" placeholder="Your note…" rows="3"></textarea>
+</div>
+
+<!-- New document modal -->
+<div class="newdoc-overlay" id="newdoc-overlay">
+  <div class="newdoc-modal" id="newdoc-modal">
+    <div class="newdoc-head">
+      <span class="newdoc-title" id="newdoc-title">New Document</span>
+      <button class="newdoc-close" id="newdoc-close">✕</button>
+    </div>
+    <div class="newdoc-body">
+      <label for="newdoc-input">Title</label>
+      <input type="text" id="newdoc-input" placeholder="e.g. Chapter Two" autocomplete="off">
+    </div>
+    <div class="newdoc-foot">
+      <button class="newdoc-cancel" id="newdoc-cancel">Cancel</button>
+      <button class="newdoc-create" id="newdoc-create">Create</button>
+    </div>
+  </div>
 </div>
 
 <!-- Vault folder picker modal -->
@@ -167,6 +191,7 @@
 
 <input type="range" id="font-size-slider" min="18" max="30" value="17" step="1">
 
+<script src="/mn-editor.bundle.js"></script>
 <script src="/client.js"></script>
 <script>
   // Register service worker for offline support

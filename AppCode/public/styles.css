@@ -43,12 +43,56 @@
       overflow: hidden;
       transition: transform 0.28s ease;
       z-index: 20;
+      position: relative; /* anchors .sidebar-collapse-btn — without this it
+                              was positioning against the viewport/body and
+                              landing off-screen or under other elements */
     }
 
     .sidebar-head {
       padding: 1.4rem 1.2rem 1rem;
       border-bottom: 1px solid var(--rule);
     }
+
+    /* ── Desktop sidebar collapse ── */
+    .sidebar-collapse-btn {
+      display: none; /* shown on desktop only, see media query below */
+      position: absolute;
+      top: 0.6rem;
+      right: 0.6rem;
+      width: 22px;
+      height: 22px;
+      align-items: center;
+      justify-content: center;
+      background: none;
+      border: none;
+      border-radius: 4px;
+      color: var(--ink-faint);
+      cursor: pointer;
+      z-index: 2;
+      transition: background 0.15s, color 0.15s;
+    }
+    .sidebar-collapse-btn:hover { background: rgba(0,0,0,0.06); color: var(--ink); }
+    .sidebar-collapse-btn svg { width: 14px; height: 14px; }
+
+    .sidebar-expand-btn {
+      display: none; /* toggled visible only when sidebar is collapsed, desktop only */
+      position: fixed;
+      top: 0.9rem;
+      left: 0.6rem;
+      width: 26px;
+      height: 26px;
+      align-items: center;
+      justify-content: center;
+      background: var(--margin-bg);
+      border: 1px solid var(--rule);
+      border-radius: 5px;
+      color: var(--ink-faint);
+      cursor: pointer;
+      z-index: 25;
+      transition: background 0.15s, color 0.15s;
+    }
+    .sidebar-expand-btn:hover { color: var(--ink); background: var(--paper-warm); }
+    .sidebar-expand-btn svg { width: 14px; height: 14px; }
 
     .sidebar-title {
       font-family: var(--font-ui);
@@ -80,6 +124,31 @@
       color: var(--ink-faint);
       padding: 0.9rem 1.2rem 0.35rem;
     }
+
+    .nav-section-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding-right: 0.7rem;
+    }
+    .nav-section-head .nav-section-label { padding-right: 0; flex: 1; }
+
+    .nav-section-add {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 18px;
+      height: 18px;
+      border: none;
+      background: none;
+      color: var(--ink-faint);
+      cursor: pointer;
+      border-radius: 3px;
+      transition: background 0.15s, color 0.15s;
+      flex-shrink: 0;
+    }
+    .nav-section-add:hover { background: rgba(0,0,0,0.06); color: var(--accent); }
+    .nav-section-add svg { width: 11px; height: 11px; }
 
     .nav-item {
       display: block;
@@ -177,6 +246,10 @@
       text-transform: uppercase;
       color: var(--accent);
       margin-bottom: 0.7rem;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.8rem;
     }
 
     .chapter-header h1 {
@@ -185,6 +258,87 @@
       line-height: 1.2;
       letter-spacing: -0.01em;
     }
+
+    /* ── Edit mode toggle & editor ── */
+    .edit-mode-toggle {
+      display: flex;
+      align-items: center;
+      gap: 0.35rem;
+      background: none;
+      border: 1px solid var(--rule);
+      border-radius: 4px;
+      padding: 0.3rem 0.6rem;
+      color: var(--ink-faint);
+      font-family: var(--font-ui);
+      font-size: 0.58rem;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      cursor: pointer;
+      transition: color 0.15s, border-color 0.15s, background 0.15s;
+    }
+    .edit-mode-toggle:hover { color: var(--ink); border-color: var(--ink-faint); }
+    .edit-mode-toggle svg { width: 12px; height: 12px; }
+    .edit-mode-toggle.active {
+      color: var(--paper);
+      background: var(--accent);
+      border-color: var(--accent);
+    }
+
+    .editor-wrap {
+      grid-column: 1;
+      padding-right: 1rem;
+    }
+
+    .editor-toolbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 1rem;
+      padding-bottom: 0.8rem;
+      margin-bottom: 1.2rem;
+      border-bottom: 1px dashed var(--rule);
+      flex-wrap: wrap;
+    }
+
+    .editor-toolbar-hint {
+      font-family: var(--font-ui);
+      font-size: 0.55rem;
+      letter-spacing: 0.05em;
+      color: var(--ink-faint);
+    }
+
+    .editor-toolbar-actions { display: flex; gap: 0.5rem; }
+
+    .editor-btn {
+      font-family: var(--font-ui);
+      font-size: 0.6rem;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      padding: 0.35rem 0.8rem;
+      border-radius: 4px;
+      border: 1px solid var(--rule);
+      background: none;
+      color: var(--ink-light);
+      cursor: pointer;
+      transition: background 0.15s, color 0.15s, border-color 0.15s;
+    }
+    .editor-btn:hover { border-color: var(--ink-faint); }
+    .editor-btn-save {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: var(--paper);
+    }
+    .editor-btn-save:hover { opacity: 0.9; }
+
+    .editor-mount {
+      font-family: var(--font-body);
+      font-size: var(--reader-font-size, 17px);
+      line-height: 1.7;
+      min-height: 40vh;
+    }
+    /* CodeMirror fills the mount and inherits the reading font/size */
+    .editor-mount .cm-editor { height: 100%; }
+    .editor-mount .cm-scroller { padding-bottom: 4rem; }
 
     /* ── Main text ── */
     .main-text {
@@ -768,6 +922,24 @@
       .mn-chip { animation: none; }
     }
 
+    /* ── Desktop sidebar collapse (no-distraction mode) ── */
+    @media (min-width: 769px) {
+      .sidebar-collapse-btn { display: flex; }
+
+      .app.sidebar-collapsed .sidebar {
+        width: 0;
+        border-right: none;
+        overflow: hidden;
+      }
+      /* Keep inner content from reflowing/wrapping awkwardly while width animates to 0 */
+      .app.sidebar-collapsed .sidebar-head,
+      .app.sidebar-collapsed .sidebar-nav,
+      .app.sidebar-collapsed .sidebar > div {
+        width: var(--sidebar-w);
+      }
+      .app.sidebar-collapsed .sidebar-expand-btn { display: flex; }
+    }
+
     /* ── Mobile breakpoint ── */
     @media (max-width: 768px) {
       .sidebar {
@@ -793,6 +965,10 @@
       .chapter-header h1 { font-size: 1.6rem; }
 
       .main-text { grid-column: 1; padding-right: 0; }
+      .editor-wrap { grid-column: 1; padding-right: 0; }
+      .editor-toolbar { flex-direction: column; align-items: flex-start; gap: 0.6rem; }
+      .editor-toolbar-hint { display: none; } /* too cramped on small screens */
+      .edit-mode-toggle span { display: none; } /* icon-only on mobile to save topbar space */
 
       /* On mobile the margin column disappears — notes show as bottom sheet */
       .margin-col { display: none; }
@@ -903,6 +1079,105 @@
         border-bottom-color: var(--ink);
       }
     }
+
+    /* ── New document modal ── */
+    .newdoc-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.45);
+      z-index: 600;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.2s ease;
+    }
+    .newdoc-overlay.open { opacity: 1; pointer-events: all; }
+    .newdoc-modal {
+      background: var(--note-bg);
+      border-radius: 12px;
+      box-shadow: 0 8px 40px rgba(0,0,0,0.22), 0 0 0 1px rgba(0,0,0,0.06);
+      width: min(380px, calc(100vw - 2rem));
+      overflow: hidden;
+      transform: translateY(8px) scale(0.98);
+      transition: transform 0.2s ease;
+    }
+    .newdoc-overlay.open .newdoc-modal { transform: translateY(0) scale(1); }
+    .newdoc-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 1rem 1.2rem 0.8rem;
+      border-bottom: 1px solid var(--rule);
+    }
+    .newdoc-title {
+      font-family: var(--font-ui);
+      font-size: 0.6rem;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      color: var(--accent);
+    }
+    .newdoc-close {
+      background: none;
+      border: none;
+      cursor: pointer;
+      font-family: var(--font-ui);
+      font-size: 0.6rem;
+      color: var(--ink-faint);
+      padding: 0.2rem 0.4rem;
+      border-radius: 4px;
+      transition: color 0.12s;
+    }
+    .newdoc-close:hover { color: var(--ink); }
+    .newdoc-body { padding: 1rem 1.2rem; }
+    .newdoc-body label {
+      display: block;
+      font-family: var(--font-ui);
+      font-size: 0.55rem;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: var(--ink-faint);
+      margin-bottom: 0.5rem;
+    }
+    .newdoc-body input {
+      width: 100%;
+      padding: 0.55rem 0.7rem;
+      border: 1px solid var(--rule);
+      border-radius: 6px;
+      background: var(--paper);
+      font-family: var(--font-body);
+      font-size: 0.9rem;
+      color: var(--ink);
+    }
+    .newdoc-body input:focus { outline: none; border-color: var(--accent); }
+    .newdoc-foot {
+      display: flex;
+      justify-content: flex-end;
+      gap: 0.5rem;
+      padding: 0.8rem 1.2rem 1.1rem;
+    }
+    .newdoc-cancel, .newdoc-create {
+      font-family: var(--font-ui);
+      font-size: 0.6rem;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      padding: 0.45rem 0.9rem;
+      border-radius: 5px;
+      border: 1px solid var(--rule);
+      background: none;
+      color: var(--ink-light);
+      cursor: pointer;
+      transition: background 0.15s, color 0.15s, border-color 0.15s;
+    }
+    .newdoc-cancel:hover { border-color: var(--ink-faint); }
+    .newdoc-create {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: var(--paper);
+    }
+    .newdoc-create:hover { opacity: 0.9; }
+    .newdoc-create:disabled { opacity: 0.5; cursor: default; }
 
     /* ── Vault folder picker modal ── */
     .vault-picker-overlay {
