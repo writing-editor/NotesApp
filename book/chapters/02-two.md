@@ -1,5 +1,7 @@
 # two 
+
 # ManuScript
+
 
 A markdown-based manuscript reader and [mn: this is a note]margin-note editor. Keep your book as `.md` files in a git repository, read and annotate it from your laptop or your phone, and sync changes via git — no cloud service, no proprietary format.
 
