@@ -540,6 +540,19 @@
       pointer-events: none;
     }
 
+    /* Chips pushed down by collision-avoidance (two notes anchored to the
+       same/adjacent line) don't get a connector line back up to their
+       anchor at all — with two notes stacked in the same run, a drawn line
+       reads as noise rather than signal. Instead, indent the shifted chip
+       like a tab, so it visually reads as "the next note in this run"
+       rather than a fresh note starting flush at the margin edge. */
+    .mn-chip[data-shifted="true"] {
+      padding-left: 1.1rem;
+    }
+    .mn-chip[data-shifted="true"] .mn-connector {
+      display: none;
+    }
+
     /* ── Popup ── */
     .mn-popup {
       position: fixed;

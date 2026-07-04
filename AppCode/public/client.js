@@ -527,6 +527,19 @@ function buildScrollbarTOC() {
 }
 
 // ── Margin chips ─────────────────────────────────────────────────────────────
+// Minimum vertical gap (px) enforced between the tops of two stacked chips —
+// keeps two notes anchored to the same/adjacent line from overlapping.
+const MN_CHIP_MIN_GAP = 8;
+// Rough line-height (px) of chip preview text at the current reader font size,
+// used to convert "available space before the next chip" into a clamp count.
+function mnPreviewLineHeightPx() {
+  const rootSize = parseFloat(
+    getComputedStyle(document.documentElement).getPropertyValue('--reader-font-size')
+  ) || 17;
+  // .mn-chip-preview font-size is 0.75 * reader size, with line-height 1.4
+  return rootSize * 0.75 * 1.4;
+}
+
 function positionChips() {
   const mainText  = document.getElementById('main-text');
   const marginCol = document.getElementById('margin-col');
@@ -538,26 +551,171 @@ function positionChips() {
 
   marginCol.innerHTML = '';
 
+  const numRowH = 14; // ~.mn-chip-num row height incl. margin, constant regardless of font size
+  const lineH   = mnPreviewLineHeightPx();
+
+  // Gather layout info first (natural top + connector target + how many
+  // lines this note's content could fill if given unlimited room) before
+  // touching the DOM, so we can resolve the whole cluster in one pass.
+  const items = [];
   currentNotes.forEach(note => {
     const anchor = mainText.querySelector(`.mn-anchor[data-note-id="${note.id}"]`);
     if (!anchor) return;
 
-    const aRect  = anchor.getBoundingClientRect();
-    const topPx  = aRect.top + scrollTop - marginTop;
+    const aRect      = anchor.getBoundingClientRect();
+    const naturalTop = aRect.top + scrollTop - marginTop;
+
+    // Rough estimate of how many lines the full note would need to render
+    // without clamping — used both as an upper bound and as a "weight" when
+    // splitting shared space between competing notes below.
+    const approxCharsPerLine = 32; // tuned to .mn-chip-preview's width/font
+    const desiredLines = Math.max(1, Math.ceil(note.content.length / approxCharsPerLine));
+
+    items.push({
+      note,
+      anchor,
+      naturalTop,
+      connectorTop: aRect.height / 2,
+      desiredLines,
+    });
+  });
+
+  // Sort top-to-bottom so collision resolution only ever pushes chips *down*,
+  // preserving reading order in the margin.
+  items.sort((a, b) => a.naturalTop - b.naturalTop);
+
+  // ── Group into clusters ────────────────────────────────────────────────
+  // A cluster is a run of consecutive notes whose *minimum* footprints
+  // (one line each) would overlap if placed at their natural positions.
+  // Notes with generous natural spacing between them form their own
+  // single-item cluster and are left alone.
+  const minFootprint = numRowH + lineH; // smallest a chip can ever be (1 line)
+  const clusters = [];
+  let current = [items[0]].filter(Boolean);
+  for (let i = 1; i < items.length; i++) {
+    const prev = items[i - 1];
+    const cur  = items[i];
+    if (cur.naturalTop - prev.naturalTop < minFootprint) {
+      current.push(cur);
+    } else {
+      clusters.push(current);
+      current = [cur];
+    }
+  }
+  if (current.length) clusters.push(current);
+
+  // ── Resolve each cluster ──────────────────────────────────────────────
+  // Instead of only glancing at the *next* chip, we now look at the whole
+  // run of colliding notes together: the total room the cluster spans
+  // (from the first note's natural top to the next cluster's natural top,
+  // or a generous cap for the last cluster) is split across every note in
+  // the cluster in proportion to how much content each one actually has,
+  // so a short note next to a long one doesn't hog space it doesn't need,
+  // and a long note isn't clamped to 1 line just because a short neighbor
+  // happens to sit nearby.
+  clusters.forEach((cluster, ci) => {
+    const clusterStart = cluster[0].naturalTop;
+    const nextClusterStart = (ci + 1 < clusters.length)
+      ? clusters[ci + 1][0].naturalTop
+      : clusterStart + Math.max(400, cluster.length * 120);
+
+    const totalSpan = Math.max(
+      nextClusterStart - clusterStart,
+      cluster.length * minFootprint // never less than everyone's 1-line minimum
+    );
+
+    if (cluster.length === 1) {
+      // No collision at all — sits at its natural spot, gets everything up
+      // to the next cluster (or note if within the same near-miss range).
+      const only = cluster[0];
+      only.top = only.naturalTop;
+      const availablePx = Math.max(0, totalSpan - numRowH - MN_CHIP_MIN_GAP);
+      only.maxLines = clampLines(availablePx / lineH, only.desiredLines);
+      return;
+    }
+
+    // Multi-note cluster: give each note at least 1 line, then divide the
+    // leftover space (in whole line-units) across the cluster.
+    //
+    // A straight one-shot proportional split isn't quite right: if a note's
+    // proportional share exceeds what its own content actually needs, that
+    // excess should go back into the pot for everyone else, rather than
+    // being wasted as blank space in that note's chip. So this waterfills
+    // iteratively — each round, give every still-growing note an equal(ish)
+    // slice of the remaining pot, weighted by desired length; any note that
+    // hits its content ceiling in a round drops out and its leftover share
+    // is redistributed in the next round.
+    const n = cluster.length;
+    const guaranteedPerNote = numRowH + lineH; // 1 line floor
+    let leftoverLines = Math.max(
+      0,
+      (totalSpan - n * guaranteedPerNote - (n - 1) * MN_CHIP_MIN_GAP) / lineH
+    );
+
+    cluster.forEach(item => { item.allocLines = 1; }); // everyone starts with their 1-line floor
+    let growable = cluster.filter(item => item.desiredLines > item.allocLines);
+
+    let guard = 0;
+    while (leftoverLines > 0.001 && growable.length && guard < 50) {
+      guard++;
+      const weightTotal = growable.reduce((s, it) => s + (it.desiredLines - it.allocLines), 0);
+      let spentThisRound = 0;
+      growable.forEach(item => {
+        const weight = (item.desiredLines - item.allocLines) / weightTotal;
+        const grant = Math.min(leftoverLines * weight, item.desiredLines - item.allocLines);
+        item.allocLines += grant;
+        spentThisRound += grant;
+      });
+      leftoverLines -= spentThisRound;
+      growable = growable.filter(item => item.desiredLines > item.allocLines + 0.01);
+    }
+
+    let cursor = clusterStart;
+    cluster.forEach(item => {
+      item.top = cursor;
+      item.maxLines = clampLines(item.allocLines, item.desiredLines);
+      // Advance by the height actually granted (post-cap), not a pre-cap
+      // estimate — otherwise a note capped down to fewer lines than its
+      // "fair share" still pushes everyone after it down as if it used the
+      // full share, wasting margin space for no reason.
+      cursor += numRowH + (item.maxLines * lineH) + MN_CHIP_MIN_GAP;
+    });
+  });
+
+  function clampLines(rawLines, desiredLines) {
+    let n = Math.floor(rawLines);
+    if (n < 1) n = 1;
+    if (n > 12) n = 12;          // sane ceiling so a huge gap doesn't dump the whole note
+    if (n > desiredLines) n = Math.max(1, desiredLines); // don't reserve more than the note needs
+    return n;
+  }
+
+  items.forEach(item => {
+    const { note, anchor, top, connectorTop, maxLines } = item;
 
     const chip = document.createElement('div');
     chip.className = 'mn-chip';
     chip.dataset.noteId = note.id;
     if (note.type) chip.dataset.noteType = note.type;
-    chip.style.top = topPx + 'px';
+    chip.style.top = top + 'px';
 
-    const connectorTop = aRect.height / 2;
+    // When collision-avoidance pushed this chip down from its natural
+    // (anchor-aligned) position, don't try to draw a line back up to the
+    // anchor at all — on the same reading line, two competing notes read
+    // clearly enough from stacking order and indentation alone. Just nudge
+    // the shifted chip in with extra left padding (a tab-like indent), so
+    // it visually reads as "the second note belonging to this run" rather
+    // than a new unrelated note starting fresh at the margin edge.
+    const shiftPx = top - item.naturalTop;
+    if (shiftPx > 0.5) chip.dataset.shifted = 'true';
+    const connectorHtml = `<div class="mn-connector" style="top:${connectorTop}px;"></div>`;
+
     chip.innerHTML = `
       <div class="mn-chip-inner">
         <span class="mn-chip-num">${note.id}</span>
-        <span class="mn-chip-preview">${note.content}</span>
+        <span class="mn-chip-preview" style="-webkit-line-clamp:${maxLines};">${note.content}</span>
       </div>
-      <div class="mn-connector" style="top:${connectorTop}px"></div>
+      ${connectorHtml}
     `;
 
     chip.addEventListener('click', () => openPopup(note, chip, anchor));
@@ -1419,6 +1577,14 @@ loadManifest();
         // Apply variable to the root HTML tag so it persists across chapter loads
         const applyFontSize = (size) => {
             document.documentElement.style.setProperty('--reader-font-size', `${size}px`);
+            // Changing the font size reflows every paragraph's height, which
+            // moves every .mn-anchor in the text — margin chips must be
+            // recomputed or they drift out of alignment with their line.
+            // Wait a frame so the browser has applied the new font-size and
+            // reflowed layout before we re-measure anchor positions.
+            requestAnimationFrame(() => {
+                if (typeof positionChips === 'function') positionChips();
+            });
         };
 
         // Set on load
