@@ -16,7 +16,7 @@
 // of the mobile app's LightningFS / service-worker / git-in-the-browser
 // machinery is needed here.
 
-const { app, BrowserWindow, Menu, dialog, shell, ipcMain } = require('electron');
+const { app, BrowserWindow, Menu, dialog, shell, ipcMain, globalShortcut } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const http = require('http');
@@ -145,14 +145,27 @@ async function startServer(vaultPath) {
 }
 
 // ── Window ───────────────────────────────────────────────────────────────
+// The app's own paper/ink theme (AppCode/public/styles.css :root), duplicated
+// here so the native window chrome can match it instead of looking like a
+// separate grey OS panel stuck on top of the app.
+const THEME = {
+  paper: '#f4f2ee',
+  ink: '#1c1a18',
+};
+
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1280,
     height: 860,
     minWidth: 760,
     minHeight: 540,
-    backgroundColor: '#1e1e1e',
+    backgroundColor: THEME.paper,
     icon: path.join(__dirname, 'build-resources', 'icon.png'),
+    // No native title bar/menu banner, and no OS-drawn border around it —
+    // we draw our own minimal draggable strip (below) colored to match the
+    // app so the window reads as one continuous surface instead of an app
+    // sitting inside a separate grey title-bar panel.
+    frame: false,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -162,6 +175,50 @@ function createWindow() {
   });
 
   mainWindow.loadURL(`http://127.0.0.1:${serverPort}/`);
+
+  // Inject a thin draggable title-bar strip with min/max/close buttons once
+  // the real page has loaded, rather than editing AppCode/public/index.html
+  // (that file is shared with the mobile build, which has no window chrome
+  // to speak of). Colors are pulled from THEME above so this can never drift
+  // out of sync with a change to styles.css without someone noticing here.
+  mainWindow.webContents.on('did-finish-load', () => {
+    mainWindow.webContents.insertCSS(`
+      .__desktop-titlebar {
+        position: fixed; top: 0; left: 0; right: 0; height: 32px;
+        display: flex; align-items: center; justify-content: flex-end;
+        background: ${THEME.paper};
+        -webkit-app-region: drag;
+        z-index: 999999;
+      }
+      .__desktop-titlebar button {
+        -webkit-app-region: no-drag;
+        width: 46px; height: 32px; border: none; background: transparent;
+        color: ${THEME.ink}; opacity: 0.55; cursor: pointer;
+        display: flex; align-items: center; justify-content: center;
+        font-family: sans-serif; font-size: 14px; line-height: 1;
+        transition: background 0.12s, opacity 0.12s;
+      }
+      .__desktop-titlebar button:hover { opacity: 1; background: rgba(0,0,0,0.06); }
+      .__desktop-titlebar button.__close:hover { background: #c0392b; color: #fff; opacity: 1; }
+      body { padding-top: 32px !important; box-sizing: border-box; }
+    `);
+
+    mainWindow.webContents.executeJavaScript(`
+      (function () {
+        if (document.querySelector('.__desktop-titlebar')) return;
+        var bar = document.createElement('div');
+        bar.className = '__desktop-titlebar';
+        bar.innerHTML =
+          '<button class="__min" title="Minimize">&#x2013;</button>' +
+          '<button class="__max" title="Maximize">&#x25A1;</button>' +
+          '<button class="__close" title="Close">&#x2715;</button>';
+        document.body.prepend(bar);
+        bar.querySelector('.__min').onclick = () => window.manuscriptDesktop.winMinimize();
+        bar.querySelector('.__max').onclick = () => window.manuscriptDesktop.winMaximizeToggle();
+        bar.querySelector('.__close').onclick = () => window.manuscriptDesktop.winClose();
+      })();
+    `);
+  });
 
   // Open any target="_blank" / window.open() links (e.g. a git remote URL)
   // in the user's real browser instead of a second Electron window.
@@ -206,43 +263,26 @@ async function openVaultDialog() {
 
 ipcMain.handle('open-vault-dialog', openVaultDialog);
 
-// ── Menu ─────────────────────────────────────────────────────────────────
-function buildMenu() {
-  const template = [
-    {
-      label: 'File',
-      submenu: [
-        { label: 'Open Vault Folder…', accelerator: 'CmdOrCtrl+O', click: openVaultDialog },
-        { type: 'separator' },
-        { role: 'quit' },
-      ],
-    },
-    {
-      label: 'Edit',
-      submenu: [
-        { role: 'undo' }, { role: 'redo' }, { type: 'separator' },
-        { role: 'cut' }, { role: 'copy' }, { role: 'paste' }, { role: 'selectAll' },
-      ],
-    },
-    {
-      label: 'View',
-      submenu: [
-        { role: 'reload' },
-        { role: 'forceReload' },
-        { role: 'toggleDevTools' },
-        { type: 'separator' },
-        { role: 'resetZoom' }, { role: 'zoomIn' }, { role: 'zoomOut' },
-        { type: 'separator' },
-        { role: 'togglefullscreen' },
-      ],
-    },
-    {
-      label: 'Window',
-      submenu: [{ role: 'minimize' }, { role: 'close' }],
-    },
-  ];
+ipcMain.handle('win-minimize', () => mainWindow?.minimize());
+ipcMain.handle('win-maximize-toggle', () => {
+  if (!mainWindow) return;
+  if (mainWindow.isMaximized()) mainWindow.unmaximize();
+  else mainWindow.maximize();
+});
+ipcMain.handle('win-close', () => mainWindow?.close());
 
-  Menu.setApplicationMenu(Menu.buildFromTemplate(template));
+// ── Menu ─────────────────────────────────────────────────────────────────
+// No visible menu bar (the File/Edit/View/Window banner) — it doesn't match
+// a single-purpose reading/editing app and duplicates buttons already in the
+// page itself. Menu.setApplicationMenu(null) removes the bar on Linux/Windows
+// entirely. "Open Vault Folder" and dev tools are still reachable via global
+// shortcuts registered below, and Ctrl/Cmd+Q or the custom close button quit.
+function buildMenu() {
+  Menu.setApplicationMenu(null);
+
+  globalShortcut.register('CmdOrCtrl+O', openVaultDialog);
+  globalShortcut.register('CmdOrCtrl+Shift+I', () => mainWindow?.webContents.toggleDevTools());
+  globalShortcut.register('CmdOrCtrl+R', () => mainWindow?.webContents.reload());
 }
 
 // ── App lifecycle ────────────────────────────────────────────────────────
@@ -253,6 +293,7 @@ app.on('window-all-closed', () => {
 
 app.on('before-quit', () => {
   if (serverProcess) serverProcess.kill();
+  globalShortcut.unregisterAll();
 });
 
 app.whenReady().then(async () => {

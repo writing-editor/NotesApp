@@ -12,4 +12,7 @@ const { contextBridge, ipcRenderer } = require('electron');
 contextBridge.exposeInMainWorld('manuscriptDesktop', {
   isElectron: true,
   openVaultDialog: () => ipcRenderer.invoke('open-vault-dialog'),
+  winMinimize: () => ipcRenderer.invoke('win-minimize'),
+  winMaximizeToggle: () => ipcRenderer.invoke('win-maximize-toggle'),
+  winClose: () => ipcRenderer.invoke('win-close'),
 });
