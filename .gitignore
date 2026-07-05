@@ -41,3 +41,9 @@ AppCode/public/mn-editor.bundle.js
 AppCode/public/mn-editor.bundle.js.map
 mobile/package-lock.json
 AppCode/public/mn-editor.bundle.js
+
+# --- 7. Electron desktop build ---
+electron/node_modules
+electron/dist
+electron/package-lock.json
+electron/build/icon.png

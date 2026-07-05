@@ -1,0 +1,71 @@
+name: Build Electron Linux App
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'AppCode/**'
+      - 'electron/**'
+      - 'book/**'
+      - '.github/workflows/build-electron-linux.yml'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install AppCode dependencies
+        working-directory: AppCode
+        # puppeteer is a listed dependency but its lib/pdf.js consumer is not
+        # currently wired into server.js (PDF export goes through lib/typst.js
+        # instead) — skip its ~200MB Chrome-for-Testing download so it can't
+        # flake or slow down the build for a browser binary nothing calls.
+        env:
+          PUPPETEER_SKIP_DOWNLOAD: '1'
+        run: npm install
+
+      - name: Build editor bundle (CodeMirror 6 live-preview editor)
+        working-directory: AppCode
+        run: npm run build:editor
+
+      - name: Install AppCode production dependencies (bundled into the app)
+        working-directory: AppCode
+        env:
+          PUPPETEER_SKIP_DOWNLOAD: '1'
+        run: npm install --omit=dev
+
+      - name: Install electron-builder Linux packaging tools
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends rpm
+
+      - name: Ensure app icon exists
+        run: |
+          mkdir -p electron/build-resources
+          if [ ! -f electron/build-resources/icon.png ]; then
+            cp mobile/store-assets/playstore-icon-512.png electron/build-resources/icon.png
+          fi
+
+      - name: Install Electron dependencies
+        working-directory: electron
+        run: npm install
+
+      - name: Build Linux packages (.deb and AppImage)
+        working-directory: electron
+        run: npm run dist:linux
+        env:
+          # No code signing / auto-update publishing configured — this is a
+          # local, unsigned build artifact produced purely by CI.
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+
+      - name: Upload Linux build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: manuscript-linux
+          path: |
+            electron/dist/*.deb
+            electron/dist/*.AppImage

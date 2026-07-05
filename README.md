@@ -1,6 +1,6 @@
 # ManuScript
 
-A markdown-based manuscript reader and margin-note editor. Keep your book as `.md` files in a git repository, read and annotate it from your laptop or your phone, and sync changes via git — no cloud service, no proprietary format.
+A markdown-based manuscript reader and margin-note editor. Keep your book as `.md` files in a git repository, read and annotate it from your laptop, your desktop, or your phone, and sync changes via git — no cloud service, no proprietary format.
 
 Your writing lives in plain markdown files inside a folder called the **vault** (`book/`), version-controlled with git. The app renders your chapters, lets you click into any paragraph to edit it, and lets you drop margin notes (queries, TODOs, references) anywhere in the text — all stored as plain-text markers directly inside your `.md` files, so nothing is ever locked into a database you can't read yourself.
 
@@ -17,8 +17,9 @@ Your writing lives in plain markdown files inside a folder called the **vault** 
 - **Remembers your place** — reopening the app returns you to the last chapter and scroll position you were at.
 - **Syncs via git** — commits happen automatically as you edit; pushing and pulling to GitHub (or any git remote) is manual, on your command, from the Settings sheet.
 - Works as:
-  - A laptop app (a small local server, `server.js`, serving the same interface a browser or the desktop shell renders)
-  - A phone app (the exact same reading/editing interface, but running fully offline inside an embedded browser — there is no phone-side server; more on this below)
+  - A **laptop app** — a small local server, `server.js`, opened in your browser.
+  - A **desktop app (Linux/Ubuntu)** — the same server, wrapped in a native window with Electron. No terminal required.
+  - A **phone app (Android)** — the same reading/editing interface, running fully offline inside an embedded browser; there is no phone-side server (more on this below).
 
 ### Setting up your vault
 
@@ -48,11 +49,19 @@ your-repo/
   ```
 - Margin notes look like `[mn: this needs a citation]` right inline in your prose — the app renders them as small superscript markers and hides the bracket syntax from the reading view.
 
-### Using it on your laptop
+### Using it on your laptop (browser)
 
 1. Run `node server.js` from the `AppCode` folder (see that folder's own setup instructions for dependencies).
 2. Open the served address in your browser.
 3. Point Settings at your git repository the first time; after that, it's remembered.
+
+### Using it on the desktop (Ubuntu / Linux, Electron)
+
+1. Download the latest `.AppImage` or `.deb` from the repo's Actions tab (built automatically by GitHub Actions on every push) or from Releases if published there.
+2. **AppImage:** `chmod +x ManuScript-*.AppImage && ./ManuScript-*.AppImage`. **deb:** `sudo dpkg -i manuscript-desktop_*.deb` and launch it from your applications menu.
+3. On first launch you'll see the same vault picker as the browser version — point it at your git repository once, and it's remembered.
+
+This build is a thin native wrapper: it starts the exact same `AppCode/server.js` in the background and opens a window pointed at it, so behavior matches the browser version exactly.
 
 ### Using it on your phone (Android)
 
@@ -67,137 +76,125 @@ your-repo/
 
 Without write access, cloning and reading will work, but **Push will fail with a 401 error.**
 
-**Known current limitation:** conflict resolution (if you edit the same file on two devices before syncing) isn't handled gracefully yet — if you hit a conflict, resolve it from the laptop app for now.
+**Known current limitation:** conflict resolution (if you edit the same file on two devices before syncing) isn't handled gracefully yet — if you hit a conflict, resolve it from the laptop or desktop app for now.
 
 ---
 
 ## Part 2 — For the developer (or an LLM picking this project back up)
 
-### The frontend editor (CodeMirror 6) — read this before touching `public/client.js`
+### Layout of this repo
 
-The reading/editing surface used to be server-rendered static HTML with two
-modes: a read-only render and a paragraph-by-paragraph `contenteditable`
-edit mode (per-paragraph `[data-block]` fetch/save via `/api/block`, with
-`.txt-seg`/`data-seg` spans marking individually-addressable text runs, and
-`.md-bold-syntax`/`.md-em-syntax` classes for in-place syntax highlighting).
+```
+AppCode/     — the actual app: Express server, frontend, CodeMirror editor, markdown/note parser
+electron/    — thin desktop wrapper around AppCode/server.js (Linux build via electron-builder)
+mobile/      — Capacitor Android shell; ports AppCode's API to a Service Worker (see below)
+book/        — an example/your own vault (front/chapters/back structure described above)
+```
 
-That has been **replaced by a single always-on CodeMirror 6 instance**,
-built from `AppCode/editor-src/*.js` into `public/mn-editor.bundle.js`
-(see `editor-src/build.js`) and mounted once per chapter by
-`mountLiveEditor()` in `public/client.js`:
+### The frontend editor (CodeMirror 6)
 
-- `editor-src/main.js` — creates the CM6 `EditorView` and wires its
-  callbacks (`onChange`, `onNotesChanged`, `onLayoutChanged`, selection
-  events) into `client.js`.
-- `editor-src/livePreview.js` — Obsidian-style live preview: hides markdown
-  syntax marks (`#`, `**`, etc.) except on the line the cursor is on.
-- `editor-src/noteWidgets.js` — renders `[mn: ...]` / `[mn.type: ...]`
-  markers as the same `span.mn-anchor > sup.mn-marker` markup the old
-  server-side `parseMd()` produced, so `styles.css` and the margin-chip
-  logic in `client.js` didn't need to change.
-- `editor-src/marginSync.js` — tells `client.js` when the note list/layout
-  needs recomputing.
+The reading/editing surface is a single always-on CodeMirror 6 instance, built from `AppCode/editor-src/*.js` into `public/mn-editor.bundle.js` (see `editor-src/build.js`) and mounted once per chapter by `mountLiveEditor()` in `public/client.js`:
 
-Whole-file text now goes through `/api/raw` (GET on chapter load, debounced
-PUT on every change) instead of per-paragraph `/api/block` calls. The old
-`p[contenteditable]` / `.txt-seg` CSS, the `editingPara`/`editingStart`/
-`editingEnd`/`editingSaved` state in `client.js`, and the `/api/block`
-GET+PUT routes in both `server.js` and `mobile-sw.js` were artifacts of that
-retired architecture with nothing left calling/producing them — all
-removed. If you ever need per-block editing again, it's recoverable from
-git history, but the current single-CM6-instance model has no use for it.
+- `editor-src/main.js` — creates the CM6 `EditorView` and wires its callbacks (`onChange`, `onNotesChanged`, `onLayoutChanged`, selection events) into `client.js`.
+- `editor-src/livePreview.js` — Obsidian-style live preview: hides markdown syntax marks (`#`, `**`, etc.) except on the line the cursor is on.
+- `editor-src/noteWidgets.js` — renders `[mn: ...]` / `[mn.type: ...]` markers as `span.mn-anchor > sup.mn-marker` markup.
+- `editor-src/marginSync.js` — tells `client.js` when the note list/layout needs recomputing.
 
-**Known CM6 gotcha (fixed, but worth understanding if related bugs
-resurface):** CodeMirror 6 only renders DOM nodes for lines inside (or very
-near) the current scroll viewport — unlike the old static-HTML view, it
-does not keep the whole document mounted. `positionChips()` in `client.js`
-used to look up each note's position with
-`document.querySelector('.mn-anchor[data-note-id=...]')`; for any note
-below/above what CM6 currently has drawn, that query returned nothing, so
-the note's margin chip simply never appeared — until the user scrolled (or
-put the cursor on) that line, which forced CM6 to draw it, or until a full
-page reload happened to draw that range on first paint. This is what caused
-"add a note in the middle → notes further down vanish until you scroll past
-them or refresh." The fix: `editor-src/main.js` exposes
-`getNoteMetrics(charPos)`, which reads CM6's internal height map via
-`view.lineBlockAt()` — this works for any position in the document whether
-or not it's currently drawn — and `positionChips()` now uses that for every
-note's vertical position instead of the DOM lookup. The DOM anchor is still
-looked up opportunistically (only for click binding / active-state
-highlighting, both of which degrade gracefully if it's absent).
+Whole-file text goes through `/api/raw` (GET on chapter load, debounced PUT on every change).
 
-### Why this project looks the way it does
+**CM6 gotcha worth knowing:** CodeMirror 6 only renders DOM nodes for lines inside (or very near) the current scroll viewport. Looking up a note's position with `document.querySelector('.mn-anchor[data-note-id=...]')` fails for any note below/above what CM6 has currently drawn. Fix: `editor-src/main.js` exposes `getNoteMetrics(charPos)`, which reads CM6's internal height map via `view.lineBlockAt()` — this works for any position whether or not it's currently drawn — and `positionChips()` in `client.js` uses that for vertical positioning instead of a DOM lookup.
 
-This app began as a normal Node.js/Express server (`AppCode/server.js`) meant to run on a laptop, reading and writing real files on disk, and using `simple-git`/native git for sync. The **mobile pivot** need was: ship the same app as an Android APK, with **no server to run** — a phone can't host a persistent backend process the way a laptop can.
+### Three shells, one backend contract
 
-The solution adopted (in `AppCode/mobile-sw.js`) was to **reimplement the entire Express API as a Service Worker**, using two browser-native technologies in place of a real filesystem and a real git binary:
+`AppCode/server.js` is the reference backend — a normal Express server reading/writing real files on disk and using `isomorphic-git`/native git for sync. Every other shell either runs that same file unmodified, or reimplements its API contract:
+
+| Shell | How it gets a backend |
+|---|---|
+| **Laptop (browser)** | Runs `AppCode/server.js` directly with `node server.js`. |
+| **Desktop (Electron, Linux)** | `electron/main.js` `require()`s the same `AppCode/server.js` in-process on a free local port, then opens a `BrowserWindow` at it. No API changes, no separate implementation — see below. |
+| **Phone (Android/Capacitor)** | A phone can't host a persistent backend process, so `AppCode/mobile-sw.js` reimplements the entire Express API as a Service Worker running against an in-browser virtual filesystem — see below. |
+
+#### Desktop (Electron)
+
+`electron/main.js` does three things: picks a free local port, `require()`s `AppCode/server.js` in-process with that port set via `process.env.PORT` (no vault path passed, so it boots to the same vault-picker UI the browser flow already has via `/api/browse` + `/api/open-vault`), then polls the port and opens a `BrowserWindow` once it answers. `electron/package.json` uses `electron-builder` to package `AppCode` (including its `node_modules`, built via CI) as an `extraResource` and produce an `AppImage` and a `.deb`. Because this shell runs the real `server.js` with real filesystem and git access, it needs no LightningFS/Service Worker port — it's the least novel of the three shells.
+
+#### Phone (Android/Capacitor)
+
+The mobile pivot's requirement was: ship an Android APK with no server to run. The solution, in `AppCode/mobile-sw.js`, reimplements the Express API as a Service Worker using two browser-native replacements:
 
 | Laptop concept | Mobile replacement | Why |
 |---|---|---|
-| Real filesystem (`fs.readFile`, etc.) | `LightningFS` — an in-browser virtual filesystem backed by IndexedDB | A Service Worker has no OS filesystem access; LightningFS emulates POSIX-like paths on top of the one storage a Service Worker *does* have (IndexedDB). |
-| Native `git` CLI via `simple-git` | `isomorphic-git` | A pure-JS git implementation that can run in a browser and operate directly on a LightningFS instance instead of a real disk. |
-| Express routes (`app.get('/api/...')`) | `fetch` event interception inside the Service Worker | The Service Worker intercepts every `/api/*` request the frontend makes and answers it locally — from the frontend's point of view, it's indistinguishable from talking to a real server. |
+| Real filesystem (`fs.readFile`, etc.) | `LightningFS` — an in-browser virtual filesystem backed by IndexedDB | A Service Worker has no OS filesystem access. |
+| Native `git` CLI | `isomorphic-git` | A pure-JS git implementation that can operate directly on a LightningFS instance. |
+| Express routes | `fetch` event interception inside the Service Worker | Indistinguishable from a real server, from the frontend's point of view. |
 
-This means **`AppCode/mobile-sw.js` is a full backend**, not a thin shim — every route that exists in `server.js` has (or should have) a matching implementation here, operating against LightningFS instead of disk. Read both files side by side before changing either one.
+`AppCode/mobile-sw.js` is a full backend, not a thin shim — every route in `server.js` has (or should have) a matching implementation here. Read both files side by side before changing either one.
 
-### The two service workers — don't confuse them
+**Two different files could be called "the service worker" — don't confuse them:**
+- `AppCode/sw.js` — a caching/offline-queue proxy for the **laptop web app**. It expects a real backend behind it and forwards `/api/*` to the network; it is not a backend by itself.
+- `AppCode/mobile-sw.js` — the actual LightningFS/isomorphic-git backend that ships inside the Android APK.
 
-There are **two different files that could be called "the service worker,"** and mixing them up has caused real bugs in this project's history:
-
-- **`AppCode/sw.js`** — a caching/offline-queue proxy. It expects a *real* backend behind it and mostly just forwards `/api/*` requests to the network, queuing writes for retry when offline. This is meant for the **laptop web app**, layered on top of the real Express server for offline resilience — it is not a backend by itself.
-- **`AppCode/mobile-sw.js`** — the actual LightningFS/isomorphic-git backend described above, meant to *be* the backend when there is no server. This is what ships inside the Android APK.
-
-They register on the same scope with similar-looking cache names. **If the wrong one ever gets bundled into the mobile build, the app will appear to "clone successfully" but silently do nothing** — `sw.js`'s network-passthrough logic has no server to talk to on a phone, so writes vanish and reads come back empty. `mobile/scripts/sync-server-files.js` has a build-time guard that fails loudly if the wrong worker gets bundled (checks the built output contains `manuscript-fs` and `/api/git/clone`) — do not remove that check.
+They register on the same scope with similar-looking cache names. If the wrong one gets bundled into the mobile build, the app appears to "clone successfully" but silently does nothing. `mobile/scripts/sync-server-files.js` has a build-time check that fails loudly if this happens (verifies the built output contains `manuscript-fs` and `/api/git/clone`) — do not remove that check.
 
 ### Critical gotchas already discovered (don't re-debug these)
 
-1. **`Buffer` is not defined in a Service Worker.** `isomorphic-git` and `LightningFS` both reference Node's `Buffer` global internally. esbuild's `platform: 'browser'` target does not polyfill this automatically. Fix already in place: `sync-server-files.js` injects the npm `buffer` package as a global via esbuild's `inject` option, plus `define: { global: 'self' }`. If you ever rebuild the bundler config from scratch, this must be re-added or every git operation throws "missing buffer dependency."
+1. **`Buffer` is not defined in a Service Worker.** `isomorphic-git` and `LightningFS` both reference Node's `Buffer` global internally; esbuild's `platform: 'browser'` target does not polyfill this. Fix in `sync-server-files.js`: inject the npm `buffer` package as a global via esbuild's `inject` option, plus `define: { global: 'self' }`.
 
-2. **`CapacitorHttp` does NOT bypass CORS for Service Worker fetches.** It only intercepts `fetch`/`XMLHttpRequest` calls made from JS running in the WebView page context. Anything `isomorphic-git` does from inside `mobile-sw.js` still hits real browser CORS. The current fix is routing all git network operations (clone/push/pull) through `https://cors.isomorphic-git.org` as a `corsProxy`. If this proxy ever goes down or rate-limits, git sync breaks — this is the single most fragile dependency in the project.
+2. **`CapacitorHttp` does NOT bypass CORS for Service Worker fetches.** It only intercepts `fetch`/`XMLHttpRequest` from JS in the WebView page context — `isomorphic-git` calls from inside `mobile-sw.js` still hit real browser CORS. Current fix: route all git network operations through `https://cors.isomorphic-git.org` as a `corsProxy`. This is the single most fragile dependency in the mobile build.
 
-3. **File paths with spaces.** Filenames like `01-chapter one.md` arrive at `/api/chapter?path=...` URL-encoded (`chapter%20one.md`). `LightningFS` needs the literal decoded string. Every route reading a `path` query param must call `decodeURIComponent()` on it first — several early implementations missed this and it looked like "some files didn't clone" when actually they cloned fine but couldn't be read back.
+3. **File paths with spaces.** Filenames like `01-chapter one.md` arrive URL-encoded (`chapter%20one.md`); `LightningFS` needs the decoded string. Every route reading a `path` query param must call `decodeURIComponent()` on it first.
 
-4. **Auto-commit must never throw.** Every note/edit route wraps its `autoCommit()` call in `.catch()` and treats failure as non-fatal — a user should be able to add notes and edit paragraphs before a git repo even exists (or if commit fails for any reason), without the UI breaking. Never make editing hard-depend on git succeeding.
+4. **Auto-commit must never throw.** Every note/edit route wraps `autoCommit()` in `.catch()` and treats failure as non-fatal — editing must never hard-depend on git succeeding.
 
-5. **Path prefixing for git operations.** `isomorphic-git`'s `dir` is always `GIT_ROOT` (`/MyWritings`), never `VAULT` (`/MyWritings/book`). Any file path used in `git.add`/`git.commit` must be prefixed with `book/` relative to `GIT_ROOT` — a vault-relative path like `chapters/x.md` must become `book/chapters/x.md` before being passed to git, or commits silently no-op.
+5. **Path prefixing for git operations.** `isomorphic-git`'s `dir` is always `GIT_ROOT`, never `VAULT` (`GIT_ROOT/book`). A vault-relative path like `chapters/x.md` must become `book/chapters/x.md` before being passed to git, or commits silently no-op.
 
-6. **Token storage is not yet real secure storage.** `getStoredToken()`/`setStoredToken()` in `client.js` are written as a thin wrapper around `capacitor-secure-storage-plugin`, with a plaintext fallback (reading directly from the settings input field) for when the plugin isn't wired up. Confirm the plugin is actually linked (`npx cap sync android` must run after `npm install` in CI) before relying on it — until then, the token is effectively stored in plain memory only, not persisted encrypted at rest.
+6. **Token storage is not yet real secure storage.** `getStoredToken()`/`setStoredToken()` in `client.js` wrap `capacitor-secure-storage-plugin`, with a plaintext fallback when the plugin isn't wired up. Confirm `npx cap sync android` runs after `npm install` in CI before relying on it.
 
-7. **Progress-save was scroll-only, not navigation- or lifecycle-aware.** The original implementation only wrote `/api/progress` from a debounced scroll listener. Switching chapters without scrolling, or closing the app immediately after opening a chapter, saved nothing — the app would always reopen at the first file. Fixed by also saving immediately on chapter switch and on `visibilitychange` → `hidden` (using `fetch(..., { keepalive: true })` so the request survives the page tearing down). If progress-loss bugs resurface, check this logic first before assuming it's a mobile/LightningFS-specific issue — the underlying bug was actually shared code and reproduced on the laptop too.
+7. **Progress-save is chapter-switch- and lifecycle-aware, not just scroll-based.** `/api/progress` saves on chapter switch and on `visibilitychange` → `hidden` (via `fetch(..., { keepalive: true })`), not only from a debounced scroll listener — otherwise switching chapters without scrolling, or closing the app right after opening one, would save nothing.
 
 ### Routes implemented in `mobile-sw.js` (mirrors `server.js`)
 
 | Route | Status |
 |---|---|
 | `POST /api/git/clone` | ✅ implemented, verifies `book/` exists post-clone |
-| `GET /api/git/status` | ✅ implemented (ahead/behind computed via `git.log` diff, not a native equivalent) |
+| `GET /api/git/status` | ✅ implemented (ahead/behind via `git.log` diff) |
 | `POST /api/git/commit` | ✅ implemented |
 | `POST /api/git/pull` | ✅ implemented, classifies conflict/network/generic errors |
 | `POST /api/git/push` | ✅ implemented, commits outstanding changes first |
 | `GET/POST /api/git/config` | ✅ implemented, persisted to `git-config.json` in LightningFS (token deliberately excluded) |
 | `GET /api/manifest` | ✅ implemented, reads `_meta.md` YAML frontmatter or falls back to first-line heuristics |
-| `GET /api/chapter` | ✅ implemented, full `parseMd()` port — not a stub |
+| `GET /api/chapter` | ✅ implemented, full `parseMd()` port |
 | `POST/DELETE/PATCH /api/note` | ✅ implemented — add/remove/retype margin notes |
 | `GET/POST /api/progress` | ✅ implemented |
-| `GET /api/export/pdf` | ❌ intentionally 501s — Puppeteer/Typst can't run in-browser; tell the user to use the laptop app |
+| `GET /api/export/pdf` | ❌ intentionally 501s — Puppeteer/Typst can't run in-browser; use the laptop or desktop app |
 | `GET /api/browse`, `/api/open-vault` | ❌ intentionally omitted — native filesystem browsing is meaningless inside a Service Worker sandbox |
 
 ### Auto-commit vs. push — this is intentional, not a bug
 
-Every note/edit action creates an **immediate local commit** the moment it succeeds — this is cheap (no network) and durable (survives app kill/crash without losing work). **Pushing to the remote is always a separate, manual, user-triggered action.** This mirrors normal git workflow (commit often, push deliberately) and avoids attempting a network call — which can fail for auth/connectivity reasons — on every keystroke-triggered save. Do not "fix" this into auto-push; it's correct as designed.
+Every note/edit action creates an immediate local commit the moment it succeeds — cheap and durable. Pushing to the remote is always a separate, manual, user-triggered action. Do not "fix" this into auto-push.
 
 ### The markdown/note parser (`parseMd`)
 
-Ported verbatim from `AppCode/lib/parse.js` into `mobile-sw.js` (not reimplemented — it's pure JS with no Node-only APIs, so it bundles cleanly). It does three things in one pass:
+Lives in `AppCode/lib/parse.js` (ported verbatim into `mobile-sw.js`, since it's pure JS with no Node-only APIs). It does three things in one pass:
 
 1. Extracts `[mn...]` / `[mn.type: ...]` markers into a `notes` array, replacing them in-place with null-byte placeholders so surrounding text reflow doesn't shift character offsets.
-2. Splits the document into blocks (paragraphs) separated by blank lines, tracking each block's starting character offset (`data-block`) — this is what the frontend's click-to-edit feature uses to know which byte range of the raw file to send back on save.
-3. Renders headings/lists/blockquotes/code fences via `marked`, and hand-rolls inline formatting (`**bold**`, `*italic*`, `~~strike~~`) plus `data-off`/`data-seg` span wrapping for everything else, so individual text runs within a paragraph are independently addressable.
+2. Splits the document into blocks (paragraphs) separated by blank lines, tracking each block's starting character offset.
+3. Renders headings/lists/blockquotes/code fences via `marked`, and hand-rolls inline formatting (`**bold**`, `*italic*`, `~~strike~~`) plus span wrapping for individually-addressable text runs.
 
-If you ever need to change note syntax or add a new note type, this is the one place to edit — the regex `MN_RE` and the `NOTE_TYPE_CLASS` map are the two things that define what's recognized.
+If you ever need to change note syntax or add a new note type, this is the one place to edit — the regex `MN_RE` and the `NOTE_TYPE_CLASS` map define what's recognized.
 
-### Build pipeline
+### Build pipelines
 
+**Desktop (Electron):**
+```
+AppCode/  ──npm install, npm run build:editor──▶  bundled AppCode (incl. node_modules)
+                                                    │
+                                          electron-builder extraResource
+                                                    │
+                                       AppImage + .deb (GitHub Actions)
+```
+
+**Mobile (Capacitor):**
 ```
 AppCode/mobile-sw.js  ──esbuild bundle──▶  mobile/www/sw.js   (registered by the app)
 AppCode/public/*.js,*.html,*.css  ──copy──▶  mobile/www/*
@@ -207,20 +204,22 @@ AppCode/public/*.js,*.html,*.css  ──copy──▶  mobile/www/*
                                     GitHub Actions builds the APK
 ```
 
-`mobile/scripts/sync-server-files.js` does the esbuild bundling and the copy step, and includes a hard build-time check that fails the pipeline if the wrong service worker (`sw.js` instead of `mobile-sw.js`) ends up in the output — see gotcha #2 above for why this matters.
+`mobile/scripts/sync-server-files.js` does the mobile esbuild bundling/copy step and includes the build-time guard mentioned above — do not remove it.
 
 ### App identity
 
-- **App display name:** "ManuScript" (`capacitor.config.json` → `appName`, and Android `res/values/strings.xml` → `app_name`).
+- **App display name:** "ManuScript" — `mobile/capacitor.config.json` → `appName`, Android `res/values/strings.xml` → `app_name`, and `electron/package.json` → `build.productName`.
+
 ### If you're an LLM picking this project back up
 
 Read, in this order:
 1. This README.
-2. `AppCode/server.js` and `AppCode/lib/git-sync.js` — the laptop reference implementation; the mobile port must stay behaviorally equivalent to this.
-3. `AppCode/mobile-sw.js` — the actual mobile backend.
-4. `AppCode/public/client.js` — the shared frontend, works against either backend.
-5. `AppCode/editor-src/*.js` (and the "frontend editor" section above) — the CodeMirror 6 editor that `client.js` mounts; read this before changing anything related to editing, note markers, or margin-chip layout.
+2. `AppCode/server.js` and `AppCode/lib/git-Sync.js` — the reference implementation; both the Electron and mobile shells must stay behaviorally equivalent to this.
+3. `electron/main.js` — the desktop shell, if you're touching desktop packaging.
+4. `AppCode/mobile-sw.js` — the mobile backend, if you're touching mobile.
+5. `AppCode/public/client.js` — the shared frontend, works against any of the three backends.
+6. `AppCode/editor-src/*.js` — the CodeMirror 6 editor `client.js` mounts; read this before changing anything related to editing, note markers, or margin-chip layout.
 
-Before adding any new route or feature: check whether it already exists in `server.js` first. If it does, port it into `mobile-sw.js` following the same LightningFS/isomorphic-git patterns already established there rather than inventing a new approach. If it's genuinely laptop-only (filesystem browsing, PDF export via Puppeteer/Typst), don't port it — stub it with a clear error message instead, as done for `/api/export/pdf`.
+Before adding any new route or feature: check whether it already exists in `server.js` first. The Electron shell needs no porting (it runs `server.js` directly) — only the mobile Service Worker needs a matching port, following the same LightningFS/isomorphic-git patterns already established there. If a feature is genuinely laptop/desktop-only (filesystem browsing, PDF export via Puppeteer/Typst), don't port it to mobile — stub it with a clear error message instead, as done for `/api/export/pdf`.
 
-Before shipping any change to `mobile-sw.js` or the build pipeline, verify against the gotchas list above — most of the bugs hit during this project's development were re-discoveries of the same handful of root causes (Buffer polyfill, CORS-in-a-Service-Worker, URL-encoded paths, git path prefixing).
+Before shipping any change to `mobile-sw.js` or its build pipeline, check the gotchas list above first — most bugs hit during this project's history were re-discoveries of the same handful of root causes (Buffer polyfill, CORS-in-a-Service-Worker, URL-encoded paths, git path prefixing).
