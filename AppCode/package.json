@@ -4,7 +4,8 @@
   "description": "Margin-note reading and annotation server for Obsidian manuscripts",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js ../book"
+    "start": "node server.js ../book",
+    "build:editor": "node editor-src/build.js"
   },
     "dependencies": {
     "@fontsource/dm-mono": "^5.2.7",
@@ -16,5 +17,16 @@
     "marked": "^15.0.12",
     "puppeteer": "^24.9.0",
     "ws": "^8.18.2"
+  },
+  "devDependencies": {
+    "@codemirror/commands": "^6.7.1",
+    "@codemirror/lang-markdown": "^6.3.1",
+    "@codemirror/language": "^6.10.8",
+    "@codemirror/language-data": "^6.5.1",
+    "@codemirror/state": "^6.5.0",
+    "@codemirror/view": "^6.35.3",
+    "@lezer/highlight": "^1.2.1",
+    "@lezer/markdown": "^1.4.0",
+    "esbuild": "^0.24.2"
   }
 }

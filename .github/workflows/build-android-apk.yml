@@ -23,6 +23,10 @@ jobs:
         working-directory: AppCode
         run: npm install
 
+      - name: Build editor bundle (CodeMirror 6 live-preview editor)
+        working-directory: AppCode
+        run: npm run build:editor
+
       - name: Install mobile dependencies
         working-directory: mobile
         env:

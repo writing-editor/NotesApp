@@ -16,16 +16,6 @@ __pycache__/
 *.lof
 *.lot
 
-# --- 3. The Auto-Generated Intermediate Files ---
-# We ignore the folder where builder.py dumps the converted tex fragments.
-# Why? Because these are duplicates of your Markdown files.
-99_System/tex_build/
-02_Archive
-00_Inbox
-TeachingCourse
-Excalidraw
-The
-
 # --- 4. Obsidian Specifics ---
 # Track your plugins and settings, but ignore your specific window layout
 # (so your mobile layout doesn't overwrite your laptop layout)
@@ -45,10 +35,7 @@ Thumbs.db
 # Ignore all PDFs by default (to prevent accidental backup of random downloads)
 *.pdf
 
-# ...BUT, Force-track the final Output PDF
-#!Output/*.pdf
-
-/*.md
 AppCode/node_modules
-!README.md
 AppCode/package-lock.json
+AppCode/public/mn-editor.bundle.js
+AppCode/public/mn-editor.bundle.js.map

@@ -10,7 +10,7 @@ let editingStart     = null;
 let editingEnd       = null;
 let editingSaved     = false;
 let _progressTimer   = null;
-let _lastRenderedHtml = ''; // used to skip WS reloads that match what we already rendered
+let _lastRenderedRaw = ''; // used to skip WS reloads that match what we already rendered
 let cachedTOCHeight  = 0;
 let tocTicking       = false;
 
@@ -68,7 +68,7 @@ const ws = new WebSocket(wsProto + '://' + location.host);
 ws.onmessage = async e => {
   const msg = JSON.parse(e.data);
   if ((msg.type === 'file-changed' || msg.type === 'file-added') && currentPath) {
-    if (editingPara || docModeActive) return; // don't interrupt an active edit
+    if (editingPara) return; // don't interrupt an active legacy paragraph edit
     // Ask the server for the current vault root, then compute a relative path.
     // This avoids the hardcoded '/book/' split that breaks on any other folder name.
     try {
@@ -222,16 +222,17 @@ async function loadChapter(relPath, updateNav = true) {
   const wrap = document.getElementById('page-wrap');
   wrap.innerHTML = '<div class="state-msg">Loading…</div>';
 
+  await flushPendingSave();
+
   try {
-    const res = await fetch('/api/chapter?path=' + encodeURIComponent(relPath));
+    const res = await fetch('/api/raw?path=' + encodeURIComponent(relPath));
     if (!res.ok) {
       const err = await res.json().catch(() => ({ error: res.statusText }));
       wrap.innerHTML = `<div class="state-msg" style="color:#c0392b;">Error loading chapter: ${err.error || res.status}<br><small>${relPath}</small></div>`;
       return;
     }
-    const data   = await res.json();
-    currentNotes = data.notes || [];
-    _lastRenderedHtml = data.bodyHtml;
+    const data = await res.json(); // { raw, words, chars }
+    _lastRenderedRaw = data.raw;
     renderChapter(data);
   } catch (e) {
     wrap.innerHTML = `<div class="state-msg" style="color:#c0392b;">Network error: ${e.message}</div>`;
@@ -241,75 +242,53 @@ async function loadChapter(relPath, updateNav = true) {
 function renderChapter(data) {
   const wrap = document.getElementById('page-wrap');
 
-  // Derive title from first h1 in bodyHtml
-  const titleMatch = data.bodyHtml.match(/<h1[^>]*>(.*?)<\/h1>/i);
-  const title = titleMatch ? titleMatch[1].replace(/<[^>]+>/g, '') : '';
+  // Derive title from the first ATX h1 in the raw markdown
+  const titleMatch = data.raw.match(/^#\s+(.+)$/m);
+  const title = titleMatch ? titleMatch[1].trim() : '';
 
-  const wordCount = data.words
-    ? `<span style="font-family:var(--font-ui);font-size:0.55rem;color:var(--ink-faint);letter-spacing:0.08em;margin-left:1.2rem;">${data.words.toLocaleString()} words</span>`
+  const words = data.raw.trim() ? data.raw.trim().split(/\s+/).length : 0;
+  const wordCount = words
+    ? `<span style="font-family:var(--font-ui);font-size:0.55rem;color:var(--ink-faint);letter-spacing:0.08em;margin-left:1.2rem;">${words.toLocaleString()} words</span>`
     : '';
 
   wrap.innerHTML = `
     <header class="chapter-header">
-      <div class="chapter-label">
-        Draft${wordCount}
-        <button class="edit-mode-toggle" id="edit-mode-toggle" title="Toggle edit mode (Ctrl+E)">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg>
-          <span>Edit</span>
-        </button>
-      </div>
+      <div class="chapter-label">Draft${wordCount}</div>
       <h1>${title}</h1>
     </header>
-    <article class="main-text" id="main-text">${data.bodyHtml}</article>
+    <article class="main-text" id="main-text"></article>
     <aside class="margin-col" id="margin-col"></aside>
-    <div class="editor-wrap" id="editor-wrap" style="display:none;">
-      <div class="editor-toolbar">
-        <span class="editor-toolbar-hint">Editing · click away or Ctrl/Cmd+Enter to save · Esc to discard · Ctrl/Cmd+B bold · Ctrl/Cmd+I italic</span>
-      </div>
-      <div class="editor-mount" id="editor-mount"></div>
-    </div>
   `;
 
-  positionChips();
+  mountLiveEditor(data.raw);
   buildScrollbarTOC();
   setupProgressSave();
-  setupInlineEditing();
-  setupEditModeToggle();
 }
 
-// ── Silent refresh — swap content without scroll jump or blink ───────────────
-// Used for all in-chapter updates: note add/delete/retype, inline edit save,
-// WS file-change signals. Never touches the scroll position.
+// ── Silent refresh — reload the doc without a scroll jump or blink ──────────
+// Used for WS file-change signals (e.g. another device/tab edited the same
+// file). Skipped while the user is actively typing here — their own edits
+// are the source of truth for the doc they're mid-editing.
 async function silentRefresh() {
-  if (!currentPath || editingPara || docModeActive) return;
+  if (!currentPath || !liveEditor) return;
 
   try {
-    const res = await fetch('/api/chapter?path=' + encodeURIComponent(currentPath));
+    const res = await fetch('/api/raw?path=' + encodeURIComponent(currentPath));
     if (!res.ok) return;
     const data = await res.json();
 
-    // Skip if content is identical to what we already rendered (prevents
-    // double-render when we trigger a WS event from our own write).
-    if (data.bodyHtml === _lastRenderedHtml) return;
+    // Skip if content is identical to what's already loaded (prevents a
+    // pointless re-render when we trigger a WS event from our own write).
+    if (data.raw === _lastRenderedRaw) return;
+    if (saveTimer) return; // a local edit is still pending — don't clobber it
 
-    const mainText  = document.getElementById('main-text');
-    const marginCol = document.getElementById('margin-col');
-    if (!mainText || !marginCol) return;
-
-    // Capture scroll before any DOM mutation
-    const main      = document.getElementById('main');
+    const main = document.getElementById('main');
     const savedScroll = main ? main.scrollTop : 0;
 
-    // Swap the two inner regions only — header stays, no "Loading…" flash
-    currentNotes    = data.notes || [];
-    _lastRenderedHtml = data.bodyHtml;
-    mainText.innerHTML  = data.bodyHtml;
-    marginCol.innerHTML = '';
+    _lastRenderedRaw = data.raw;
+    liveEditor.setDoc(data.raw);
 
-    // Restore scroll synchronously before the browser paints
     if (main) main.scrollTop = savedScroll;
-
-    positionChips();
     buildScrollbarTOC();
   } catch {}
 }
@@ -338,154 +317,65 @@ function setupProgressSave() {
   }, { passive: true, signal: _progressScrollAbort.signal });
 }
 
-// ── Whole-chapter edit mode (CodeMirror) ─────────────────────────────────────
-// Replaces the old "edit one paragraph via tooltip" flow. View mode still
-// renders exactly the same server HTML as before; edit mode swaps the whole
-// #main-text region for a CodeMirror instance over the raw markdown file,
-// and saving writes the whole file back via /api/raw.
-let cmEditor = null;
-let docModeActive = false;
+// ── Unified live editor (CodeMirror 6) ───────────────────────────────────────
+// Replaces the old view-mode/edit-mode split entirely. One CM6 instance is
+// mounted directly into #main-text for the lifetime of a chapter: markdown
+// syntax is live-previewed (hidden unless the cursor is on that line), note
+// markers render as the same .mn-anchor superscripts the old server HTML
+// used, and every keystroke schedules a debounced whole-file save via
+// /api/raw. See editor-src/main.js and EDITOR_MIGRATION_PLAN.md.
+let liveEditor = null;
+let saveTimer = null;
 
-function setupEditModeToggle() {
-  const toggleBtn = document.getElementById('edit-mode-toggle');
-  if (!toggleBtn) return;
-  toggleBtn.addEventListener('click', () => {
-    docModeActive ? exitDocEditMode(true) : enterDocEditMode();
-  });
-}
-
-// Global shortcut: Ctrl/Cmd+E toggles edit mode for the current chapter
-document.addEventListener('keydown', e => {
-  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'e') {
+function scheduleSave(text) {
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(() => {
     if (!currentPath) return;
-    e.preventDefault();
-    docModeActive ? exitDocEditMode(true) : enterDocEditMode();
-  }
-});
-
-async function enterDocEditMode() {
-  if (!currentPath || docModeActive) return;
-  if (!window.MnEditor) { console.error('Editor bundle not loaded'); return; }
-
-  // If an old single-paragraph edit was somehow active, let it save/close first
-  if (editingPara) await exitEditMode(true);
-
-  const res = await fetch('/api/raw?path=' + encodeURIComponent(currentPath));
-  if (!res.ok) return;
-  const { raw } = await res.json();
-
-  const mainText     = document.getElementById('main-text');
-  const editorWrap    = document.getElementById('editor-wrap');
-  const mount         = document.getElementById('editor-mount');
-  const toggleBtn      = document.getElementById('edit-mode-toggle');
-  const topbarToggle    = document.getElementById('topbar-edit-toggle');
-  const mobileEditBar   = document.getElementById('mobile-edit-bar');
-  if (!mainText || !editorWrap || !mount) return;
-
-  mainText.style.display  = 'none';
-  editorWrap.style.display = 'block';
-  toggleBtn.classList.add('active');
-  toggleBtn.querySelector('span').textContent = 'Viewing…';
-  if (topbarToggle) topbarToggle.classList.add('active');
-  if (mobileEditBar) mobileEditBar.classList.add('open');
-  docModeActive = true;
-
-  // Selection-driven note tooltip doesn't apply while editing raw markdown
-  selTooltip.classList.remove('visible');
-
-  cmEditor = window.MnEditor.createMarkdownEditor({
-    doc: raw,
-    parent: mount,
-    onSave: () => exitDocEditMode(true),
-    onCancel: () => exitDocEditMode(false),
-  });
-  cmEditor.focus();
-
-  // Click-away-to-save: clicking anywhere outside the editor (sidebar, nav,
-  // margin, another chapter, etc.) saves and exits — mirrors the old
-  // per-paragraph onEditBlur behavior, since on a long document scrolling
-  // back up to tap "Save" isn't realistic. Escape (wired in the CodeMirror
-  // bundle's keymap) discards instead.
-  document.addEventListener('mousedown', onDocEditClickAway, { capture: true });
-}
-
-function onDocEditClickAway(e) {
-  if (!docModeActive) return;
-  const editorWrap = document.getElementById('editor-wrap');
-  if (!editorWrap) return;
-  // Clicks inside the editor itself, or on its own save/cancel buttons,
-  // don't count as "away" — CodeMirror needs normal click-to-place-cursor.
-  if (editorWrap.contains(e.target)) return;
-  // Clicking the Edit/Viewing toggle button itself is handled by its own
-  // click listener (which calls exitDocEditMode(true) already) — ignore
-  // here to avoid a double save. Same for the mobile topbar toggle and the
-  // mobile check/x save-bar, which have their own explicit handlers below.
-  if (e.target.closest('#edit-mode-toggle')) return;
-  if (e.target.closest('#topbar-edit-toggle')) return;
-  if (e.target.closest('#mobile-edit-bar')) return;
-  exitDocEditMode(true);
-}
-
-async function exitDocEditMode(save) {
-  if (!docModeActive || !cmEditor) return;
-
-  document.removeEventListener('mousedown', onDocEditClickAway, { capture: true });
-
-  const text = cmEditor.getDoc();
-  const editorWrap    = document.getElementById('editor-wrap');
-  const mainText      = document.getElementById('main-text');
-  const toggleBtn      = document.getElementById('edit-mode-toggle');
-  const topbarToggle    = document.getElementById('topbar-edit-toggle');
-  const mobileEditBar   = document.getElementById('mobile-edit-bar');
-
-  cmEditor.destroy();
-  cmEditor = null;
-  docModeActive = false;
-
-  if (editorWrap) editorWrap.style.display = 'none';
-  if (mainText)   mainText.style.display = '';
-  if (toggleBtn) {
-    toggleBtn.classList.remove('active');
-    toggleBtn.querySelector('span').textContent = 'Edit';
-  }
-  if (topbarToggle) topbarToggle.classList.remove('active');
-  if (mobileEditBar) mobileEditBar.classList.remove('open');
-
-  if (save) {
-    await fetch('/api/raw', {
+    fetch('/api/raw', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ path: currentPath, text }),
     }).catch(() => {});
-    // Force a re-render from the freshly saved file — same pattern as
-    // exitEditMode's save path: invalidate the cache, then silentRefresh.
-    _lastRenderedHtml = '';
-    await silentRefresh();
-  }
+  }, 600);
 }
 
-// Mobile topbar edit toggle — same enter/exit functions as desktop
-document.getElementById('topbar-edit-toggle')?.addEventListener('click', () => {
-  docModeActive ? exitDocEditMode(true) : enterDocEditMode();
-});
+function mountLiveEditor(rawText) {
+  if (!window.MnEditor) { console.error('Editor bundle not loaded'); return; }
+  const mainText = document.getElementById('main-text');
+  if (!mainText) return;
 
-// Mobile check/x save-bar — icon-only equivalents of desktop's
-// click-away/Ctrl+Enter/Escape, since mobile has neither.
-document.getElementById('mobile-edit-save')?.addEventListener('click', () => exitDocEditMode(true));
-document.getElementById('mobile-edit-cancel')?.addEventListener('click', () => exitDocEditMode(false));
+  if (liveEditor) { liveEditor.destroy(); liveEditor = null; }
 
-// ── Inline paragraph editing ─────────────────────────────────────────────────
-function setupInlineEditing() {
-  // Intentionally empty. Editing now happens exclusively through the
-  // whole-chapter CodeMirror edit mode (enterDocEditMode/exitDocEditMode).
+  liveEditor = window.MnEditor.createLiveEditor({
+    parent: mainText,
+    doc: rawText,
+    onChange: (text) => scheduleSave(text),
+    onNotesChanged: (notes) => { currentNotes = notes; },
+    onLayoutChanged: () => positionChips(),
+    onSelectionForNote: ({ text, to, screenRect }) => showSelectionTooltip(text, to, screenRect),
+    onSelectionCleared: () => selTooltip.classList.remove('visible'),
+  });
 }
 
-// Kept as a no-op guard: editingPara should never be set anymore now that
-// paragraph-by-paragraph contentEditable editing has been replaced by the
-// whole-document CodeMirror edit mode, but a few call sites (WS handler,
-// silentRefresh) still check `editingPara` defensively, and
-// enterDocEditMode() calls this before opening the CodeMirror view in case
-// older client state was somehow mid-edit.
+// Flushes any pending debounced save immediately — used before navigating
+// away from a chapter so a fast switch never drops the last few keystrokes.
+async function flushPendingSave() {
+  if (!saveTimer || !liveEditor || !currentPath) return;
+  clearTimeout(saveTimer);
+  saveTimer = null;
+  await fetch('/api/raw', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ path: currentPath, text: liveEditor.getDoc() }),
+  }).catch(() => {});
+}
+
+// ── Legacy no-op guards ───────────────────────────────────────────────────────
+// editingPara should never be set anymore now that paragraph-by-paragraph
+// contentEditable editing (and, later, the whole-doc CodeMirror edit-mode
+// toggle) has been replaced by the always-on live editor mounted in
+// mountLiveEditor() above. Kept only because the WS handler still checks
+// `editingPara` defensively.
 async function exitEditMode(save) {
   editingPara  = null;
   editingStart = null;
@@ -795,44 +685,28 @@ document.addEventListener('click', e => {
 });
 
 // ── Text selection → add note ────────────────────────────────────────────────
+// Driven by the live editor's onSelectionForNote/onSelectionCleared
+// callbacks (wired in mountLiveEditor above) instead of the native
+// `selectionchange` event + DOM-offset walking the old static-HTML view
+// mode needed. CM6 selection state already gives us doc-position offsets
+// directly, so no txt-seg span lookup is needed anymore.
 const selTooltip = document.getElementById('sel-tooltip');
-// Listen to native selection changes, debounced to avoid flickering
-document.addEventListener('selectionchange', () => {
-  clearTimeout(window._selTimeout);
-  window._selTimeout = setTimeout(handleSelectionEnd, 250);
-});
 
 // CRITICAL MOBILE FIX: Prevent text selection from clearing when you tap the tooltip
 selTooltip.addEventListener('mousedown', e => e.preventDefault());
 selTooltip.addEventListener('touchstart', e => e.preventDefault(), { passive: false });
 
-function handleSelectionEnd() {
-  if (editingPara || docModeActive) return; // don't show note tooltip while editing
-  
-  const sel = window.getSelection();
-  if (!sel || sel.isCollapsed || !sel.toString().trim()) {
-    selTooltip.classList.remove('visible');
-    return;
-  }
-
-  // Ensure selection is inside main-text
-  const mainText = document.getElementById('main-text');
-  if (!mainText) return;
-  const range = sel.getRangeAt(0);
-  if (!mainText.contains(range.commonAncestorContainer)) {
-    selTooltip.classList.remove('visible');
-    return;
-  }
+function showSelectionTooltip(selectedText, charPos, rect) {
+  if (!rect) { selTooltip.classList.remove('visible'); return; }
 
   // Position tooltip above the selection (CSS !important overrides this on mobile)
-  const rect = range.getBoundingClientRect();
   const ttW  = 140; // Tooltip is a bit wider now with two buttons
   let left   = rect.left + (rect.width / 2) - (ttW / 2);
   if (left < 8) left = 8;
   if (left + ttW > window.innerWidth - 8) left = window.innerWidth - ttW - 8;
 
   selTooltip.style.left = left + 'px';
-  
+
   // On mobile, position BELOW the text to avoid overlapping the native Copy/Paste menu
   if (window.innerWidth <= 768) {
     selTooltip.style.top = (rect.bottom + 30) + 'px';
@@ -843,31 +717,10 @@ function handleSelectionEnd() {
 
   selTooltip.classList.add('visible');
 
-  // Store what we need to write the note
-  pendingPos = resolveSelectionPosition(range, sel.toString());
-}
-
-function resolveSelectionPosition(range, selectedText) {
-  // Walk up from the anchor node to find the nearest txt-seg span
-  let node = range.startContainer;
-  let seg  = null;
-
-  while (node && node !== document.getElementById('main-text')) {
-    if (node.classList && node.classList.contains('txt-seg')) { seg = node; break; }
-    node = node.parentElement;
-  }
-
-  if (!seg) return null;
-
-  const blockOffset = parseInt(seg.dataset.block, 10); // char offset of block in file
-  const segOffset   = parseInt(seg.dataset.off,   10); // char offset of segment in block
-  // range.startOffset is char offset within the text node inside the seg span
-  const localOffset = range.startOffset;
-
-  const charPos    = blockOffset + segOffset + localOffset;
-  const contextText = selectedText.trim().slice(0, 60);
-
-  return { charPos, contextText };
+  // Store what we need to write the note. charPos is the CM6 doc offset at
+  // the end of the selection (== old `to`), where the [mn: ...] marker gets
+  // inserted — matches where the old server-side writeNote() expected it.
+  pendingPos = { charPos, contextText: selectedText.trim().slice(0, 60) };
 }
 
 // ── Note type selector ───────────────────────────────────────────────────────
@@ -892,7 +745,9 @@ function handleAddNote(e) {
   if (!pendingPos) return;
 
   selTooltip.classList.remove('visible');
-  window.getSelection()?.removeAllRanges();
+  if (liveEditor && pendingPos) {
+    liveEditor.view.dispatch({ selection: { anchor: pendingPos.charPos } });
+  }
 
   sheetCtx.textContent = '…' + pendingPos.contextText + '…';
   sheetInput.value = '';
@@ -1085,7 +940,7 @@ async function createNewDoc() {
     await loadManifest();          // rebuild sidebar so the new file appears
     await loadChapter(data.path);  // jump straight to it
     closeSidebar();                // in case we're on mobile with drawer open
-    await enterDocEditMode();      // drop straight into edit mode to start writing
+    liveEditor?.focus();           // drop straight into the editor to start writing
   } catch (e) {
     alert('Could not create document: ' + e.message);
   } finally {

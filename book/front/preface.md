@@ -1,1 +1,1 @@
-this is a book about politics
+this is a book[mn: this note] about politics
