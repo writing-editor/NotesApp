@@ -1561,3 +1561,23 @@ loadManifest();
         });
     }
 })();
+
+// ── Native status bar color (Android) ───────────────────────────────────────
+// Match the OS status bar (clock/battery/signal strip above the WebView) to
+// the app's own paper background instead of leaving it at Android's default
+// dark/system color, so the very top of the screen reads as one continuous
+// surface with the in-page .topbar beneath it, same idea as the desktop
+// title bar. capacitor.config.json sets the same color/style at native
+// startup already; calling the plugin here too covers any runtime theme
+// changes and matches the existing window.Capacitor.Plugins.* access
+// pattern already used above for SecureStoragePlugin.
+(function syncNativeStatusBar() {
+    const onNative = !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
+    const StatusBar = window.Capacitor?.Plugins?.StatusBar;
+    if (!onNative || !StatusBar) return;
+
+    StatusBar.setOverlaysWebView({ overlay: false }).catch(() => {});
+    StatusBar.setBackgroundColor({ color: '#f4f2ee' }).catch(() => {});
+    // "Light" style = dark icons/text, correct for our light paper background.
+    StatusBar.setStyle({ style: 'LIGHT' }).catch(() => {});
+})();

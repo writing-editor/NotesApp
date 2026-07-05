@@ -5,8 +5,8 @@
       --ink-light:   #3a3630;
       --ink-faint:   #7a7570;
       --paper:       #f4f2ee;
-      --paper-warm:  #eeebec;
-      --margin-bg:   #efecea;
+      --paper-warm:  #eeebe5;
+      --margin-bg:   #efece6;
       --rule:        #cdc8be;
       --accent:      #2d5a45;
       --accent-h1:   #030944;
@@ -185,7 +185,7 @@
       align-items: center;
       gap: 0.8rem;
       padding: 0.7rem 1rem;
-      background: var(--margin-bg);
+      background: var(--paper);
       border-bottom: 1px solid var(--rule);
       position: sticky;
       top: 0;
