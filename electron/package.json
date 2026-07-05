@@ -4,6 +4,8 @@
   "private": true,
   "description": "ManuScript desktop shell (Electron) for Linux/Ubuntu",
   "main": "main.js",
+  "author": "Majeed Baloch",
+  "homepage": "https://github.com/writing-editor/NotesApp",
   "scripts": {
     "start": "electron .",
     "dist:linux": "electron-builder --linux deb AppImage"
@@ -13,7 +15,7 @@
     "electron-builder": "^24.13.3"
   },
   "build": {
-    "appId": "com.yourname.manuscript",
+    "appId": "com.majeedbaloch.manuscript",
     "productName": "ManuScript",
     "artifactName": "${productName}-${version}-${arch}.${ext}",
     "directories": {
@@ -49,7 +51,7 @@
       "icon": "build-resources/icon.png",
       "executableName": "manuscript",
       "synopsis": "Markdown manuscript reader and margin-note editor",
-      "maintainer": "yourname"
+      "maintainer": "Majeed Baloch"
     },
     "deb": {
       "depends": [

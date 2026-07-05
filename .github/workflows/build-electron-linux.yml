@@ -7,7 +7,6 @@ on:
     paths:
       - 'AppCode/**'
       - 'electron/**'
-      - 'book/**'
       - '.github/workflows/build-electron-linux.yml'
 
 jobs:
