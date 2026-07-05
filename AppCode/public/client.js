@@ -233,13 +233,13 @@ async function loadChapter(relPath, updateNav = true) {
     }
     const data = await res.json(); // { raw, words, chars }
     _lastRenderedRaw = data.raw;
-    renderChapter(data);
+    renderChapter(data, relPath);
   } catch (e) {
     wrap.innerHTML = `<div class="state-msg" style="color:#c0392b;">Network error: ${e.message}</div>`;
   }
 }
 
-function renderChapter(data) {
+function renderChapter(data, relPath) {
   const wrap = document.getElementById('page-wrap');
 
   // Derive title from the first ATX h1 in the raw markdown
@@ -253,14 +253,14 @@ function renderChapter(data) {
 
   wrap.innerHTML = `
     <header class="chapter-header">
-      <div class="chapter-label">Draft${wordCount}</div>
+      <div class="chapter-label">Draft${wordCount}<span class="save-status" id="save-status-desktop"></span></div>
       <h1>${title}</h1>
     </header>
     <article class="main-text" id="main-text"></article>
     <aside class="margin-col" id="margin-col"></aside>
   `;
 
-  mountLiveEditor(data.raw);
+  mountLiveEditor(data.raw, relPath);
   buildScrollbarTOC();
   setupProgressSave();
 }
@@ -270,12 +270,19 @@ function renderChapter(data) {
 // file). Skipped while the user is actively typing here — their own edits
 // are the source of truth for the doc they're mid-editing.
 async function silentRefresh() {
-  if (!currentPath || !liveEditor) return;
+  if (!editingPath || !liveEditor) return;
+  const path = editingPath; // path the *currently mounted* editor owns
 
   try {
-    const res = await fetch('/api/raw?path=' + encodeURIComponent(currentPath));
+    const res = await fetch('/api/raw?path=' + encodeURIComponent(path));
     if (!res.ok) return;
     const data = await res.json();
+
+    // Bail if the user has since navigated to a different chapter (or the
+    // editor was torn down) while this fetch was in flight — applying a
+    // stale response to whatever's mounted now would silently overwrite
+    // the wrong chapter, the same class of bug as the save-path race above.
+    if (editingPath !== path || !liveEditor) return;
 
     // Skip if content is identical to what's already loaded (prevents a
     // pointless re-render when we trigger a WS event from our own write).
@@ -326,25 +333,67 @@ function setupProgressSave() {
 // /api/raw. See editor-src/main.js and EDITOR_MIGRATION_PLAN.md.
 let liveEditor = null;
 let saveTimer = null;
+let savedStatusTimer = null;
+
+// The file path the *currently mounted editor's* pending/in-flight save(s)
+// belong to. This is intentionally a separate variable from `currentPath`:
+// `currentPath` is updated the instant chapter navigation begins (so nav
+// highlighting / progress-save / etc. can use the new path right away), but
+// a save that was scheduled against the *previous* chapter must still be
+// written to the *previous* chapter's file even after `currentPath` has
+// already moved on. Reading `currentPath` inside scheduleSave's timeout (or
+// flushPendingSave) instead of this would PUT the outgoing editor's text to
+// the incoming chapter's path — silently overwriting whatever chapter the
+// user navigates to next with stale content from the one they left. This
+// was exactly the "content bleeds into the next-opened chapter" bug: editing
+// the preface, then opening Chapter One before the 600ms debounce fired,
+// caused the preface's text to be flushed to Chapter One's path instead.
+let editingPath = null;
+
+// Small "saving…/saved" indicator, shown next to the chapter title (mobile
+// topbar) and next to the word count (desktop chapter header). Both spots
+// share the same .save-status styling; either may be absent depending on
+// viewport/render state, so guard each lookup.
+function setSaveStatus(text) {
+  clearTimeout(savedStatusTimer);
+  const mobile = document.getElementById('save-status');
+  const desktop = document.getElementById('save-status-desktop');
+  if (mobile) mobile.textContent = text;
+  if (desktop) desktop.textContent = text;
+  if (text === 'Saved') {
+    savedStatusTimer = setTimeout(() => {
+      if (mobile) mobile.textContent = '';
+      if (desktop) desktop.textContent = '';
+    }, 1500);
+  }
+}
 
 function scheduleSave(text) {
+  // Capture the path this edit belongs to *now*, at keystroke time — not
+  // whatever `currentPath` happens to be when the debounce timer fires.
+  const path = editingPath;
   clearTimeout(saveTimer);
+  setSaveStatus('Saving…');
   saveTimer = setTimeout(() => {
-    if (!currentPath) return;
+    if (!path) return;
     fetch('/api/raw', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ path: currentPath, text }),
-    }).catch(() => {});
+      body: JSON.stringify({ path, text }),
+    }).then((res) => {
+      setSaveStatus(res.ok ? 'Saved' : 'Save failed');
+    }).catch(() => setSaveStatus('Save failed'));
   }, 600);
 }
 
-function mountLiveEditor(rawText) {
+function mountLiveEditor(rawText, path) {
   if (!window.MnEditor) { console.error('Editor bundle not loaded'); return; }
   const mainText = document.getElementById('main-text');
   if (!mainText) return;
 
   if (liveEditor) { liveEditor.destroy(); liveEditor = null; }
+
+  editingPath = path;
 
   liveEditor = window.MnEditor.createLiveEditor({
     parent: mainText,
@@ -359,15 +408,20 @@ function mountLiveEditor(rawText) {
 
 // Flushes any pending debounced save immediately — used before navigating
 // away from a chapter so a fast switch never drops the last few keystrokes.
+// Must run (and resolve) BEFORE `currentPath`/`editingPath` are reassigned
+// to the next chapter, and must target `editingPath` (the outgoing
+// chapter), never `currentPath` (which may already be the incoming one).
 async function flushPendingSave() {
-  if (!saveTimer || !liveEditor || !currentPath) return;
+  if (!saveTimer || !liveEditor || !editingPath) return;
   clearTimeout(saveTimer);
   saveTimer = null;
+  const path = editingPath;
   await fetch('/api/raw', {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ path: currentPath, text: liveEditor.getDoc() }),
-  }).catch(() => {});
+    body: JSON.stringify({ path, text: liveEditor.getDoc() }),
+  }).then((res) => setSaveStatus(res.ok ? 'Saved' : 'Save failed'))
+    .catch(() => setSaveStatus('Save failed'));
 }
 
 // ── Legacy no-op guards ───────────────────────────────────────────────────────
@@ -789,33 +843,33 @@ function closeSheet() {
   pendingPos = null;
 }
 
+// Note add/retype/delete now mutate the live CM6 doc directly (via
+// liveEditor.insertNoteAt/retypeNoteById/removeNoteById) instead of calling
+// the server's /api/note endpoint and then re-fetching with silentRefresh().
+//
+// Why: /api/note wrote straight to the file on disk, independently of the
+// whole-doc debounced save (scheduleSave/flushPendingSave) that also writes
+// that same file from whatever's in the editor's memory. Two independent
+// writers racing on one file is exactly what caused the flaky note
+// behavior — depending on timing, the debounced save could either (a) land
+// after /api/note and silently wipe the note back out because the editor's
+// in-memory doc never had it, or (b) land before it, in which case the note
+// was on disk but the editor's own doc — and thus the UI — didn't reflect
+// it until a manual refresh happened to line up right. Editing the CM6 doc
+// directly means there is exactly one writer again (the debounced
+// /api/raw PUT), the same one every other keystroke already goes through,
+// so a note appears immediately and can never be raced out by a save.
 async function saveNote() {
   const text = sheetInput.value.trim();
-  if (!text || !pendingPos || !currentPath) return;
+  if (!text || !pendingPos || !editingPath || !liveEditor) return;
 
   const btn = document.getElementById('sheet-save');
   btn.disabled = true;
   btn.style.opacity = '0.5';
 
   try {
-    const res = await fetch('/api/note', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        path:      currentPath,
-        charPos:   pendingPos.charPos,
-        noteText:  text,
-        noteType:  selectedNoteType || null,
-      }),
-    });
-
-    if (res.ok) {
-      closeSheet();
-      await silentRefresh();
-    } else {
-      const err = await res.json();
-      alert('Error saving note: ' + err.error);
-    }
+    liveEditor.insertNoteAt(pendingPos.charPos, text, selectedNoteType || null);
+    closeSheet();
   } finally {
     btn.disabled = false;
     btn.style.opacity = '1';
@@ -823,30 +877,13 @@ async function saveNote() {
 }
 
 async function retypeNote(note, newType) {
-  if (!currentPath) return;
-  // Delete the old marker, then rewrite it with new type at same position
-  // We use a dedicated PATCH endpoint for this
-  await fetch('/api/note', {
-    method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      path:    currentPath,
-      noteId:  note.id,
-      charPos: note.charPos,
-      newType: newType,
-    }),
-  });
-  await silentRefresh();
+  if (!editingPath || !liveEditor) return;
+  liveEditor.retypeNoteById(note.id, newType);
 }
 
 async function removeNote(noteId, charPos) {
-  if (!currentPath) return;
-  await fetch('/api/note', {
-    method: 'DELETE',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ path: currentPath, noteId, charPos }),
-  });
-  await silentRefresh();
+  if (!editingPath || !liveEditor) return;
+  liveEditor.removeNoteById(noteId);
 }
 
 // ── Mobile sidebar ───────────────────────────────────────────────────────────

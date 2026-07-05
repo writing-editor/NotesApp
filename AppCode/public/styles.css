@@ -211,66 +211,22 @@
       flex: 1;
     }
 
-    /* ── Mobile edit toggle (topbar, floats via position:sticky on .topbar) ── */
-    .topbar-edit-toggle {
-      display: none; /* shown only on mobile, see media query */
-      align-items: center;
-      justify-content: center;
-      width: 30px;
-      height: 30px;
-      border: none;
-      background: none;
-      color: var(--ink-light);
-      cursor: pointer;
-      border-radius: 6px;
-      flex-shrink: 0;
-      transition: background 0.15s, color 0.15s;
-    }
-    .topbar-edit-toggle svg { width: 16px; height: 16px; }
-    .topbar-edit-toggle:active { background: rgba(0,0,0,0.08); }
-    .topbar-edit-toggle.active { color: var(--accent); background: rgba(0,0,0,0.05); }
-
-    /* ── Mobile edit-mode save/cancel bar ── */
-    /* Sits fixed at the top-center while editing — icon-only check/x, no
-       reliance on keyboard shortcuts (mobile has none) and no need to
-       scroll back up on a long chapter. Desktop keeps click-away + Ctrl+Enter/Esc. */
-    .mobile-edit-bar {
-      display: none;
-      align-items: center;
-      justify-content: center;
-      gap: 1.1rem;
-      position: fixed;
-      top: 0.6rem;
-      left: 50%;
-      transform: translateX(-50%);
-      background: var(--paper);
-      border: 1px solid var(--rule);
-      border-radius: 20px;
-      padding: 0.4rem 0.9rem;
-      box-shadow: 0 3px 14px rgba(0,0,0,0.14);
-      z-index: 60;
-    }
-    .mobile-edit-bar.open { display: flex; }
-    .mobile-edit-label {
+    /* ── Save status indicator ──
+       Always-on editing means there's no explicit save action to confirm —
+       this quietly reports the debounced-save lifecycle instead. Rendered
+       in two places sharing this class: #save-status (mobile topbar, next
+       to the chapter title) and #save-status-desktop (desktop chapter
+       header, next to the word count). Empty by default; text set/cleared
+       from client.js's setSaveStatus(). */
+    .save-status {
       font-family: var(--font-ui);
       font-size: 0.55rem;
-      letter-spacing: 0.1em;
+      letter-spacing: 0.08em;
       text-transform: uppercase;
       color: var(--ink-faint);
+      margin-left: 0.8rem;
+      flex-shrink: 0;
     }
-    .mobile-edit-cancel, .mobile-edit-save {
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      width: 26px;
-      height: 26px;
-      border-radius: 50%;
-      border: none;
-      cursor: pointer;
-    }
-    .mobile-edit-cancel svg, .mobile-edit-save svg { width: 15px; height: 15px; }
-    .mobile-edit-cancel { background: rgba(0,0,0,0.06); color: var(--ink-light); }
-    .mobile-edit-save   { background: var(--accent); color: var(--paper); }
 
     /* ── Page layout ── */
     .page-wrap {
@@ -321,92 +277,35 @@
       letter-spacing: -0.01em;
     }
 
-    /* ── Edit mode toggle & editor ── */
-    .edit-mode-toggle {
-      display: flex;
-      align-items: center;
-      gap: 0.35rem;
-      background: none;
-      border: 1px solid var(--rule);
-      border-radius: 4px;
-      padding: 0.3rem 0.6rem;
-      color: var(--ink-faint);
-      font-family: var(--font-ui);
-      font-size: 0.58rem;
-      letter-spacing: 0.08em;
-      text-transform: uppercase;
-      cursor: pointer;
-      transition: color 0.15s, border-color 0.15s, background 0.15s;
-    }
-    .edit-mode-toggle:hover { color: var(--ink); border-color: var(--ink-faint); }
-    .edit-mode-toggle svg { width: 12px; height: 12px; }
-    .edit-mode-toggle.active {
-      color: var(--paper);
-      background: var(--accent);
-      border-color: var(--accent);
-    }
-
-    .editor-wrap {
-      grid-column: 1;
-      padding-right: 1rem;
-    }
-
-    .editor-toolbar {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 1rem;
-      padding-bottom: 0.8rem;
-      margin-bottom: 1.2rem;
-      border-bottom: 1px dashed var(--rule);
-      flex-wrap: wrap;
-    }
-
-    .editor-toolbar-hint {
-      font-family: var(--font-ui);
-      font-size: 0.55rem;
-      letter-spacing: 0.05em;
-      color: var(--ink-faint);
-    }
-
-    .editor-toolbar-actions { display: flex; gap: 0.5rem; }
-
-    .editor-btn {
-      font-family: var(--font-ui);
-      font-size: 0.6rem;
-      letter-spacing: 0.08em;
-      text-transform: uppercase;
-      padding: 0.35rem 0.8rem;
-      border-radius: 4px;
-      border: 1px solid var(--rule);
-      background: none;
-      color: var(--ink-light);
-      cursor: pointer;
-      transition: background 0.15s, color 0.15s, border-color 0.15s;
-    }
-    .editor-btn:hover { border-color: var(--ink-faint); }
-    .editor-btn-save {
-      background: var(--accent);
-      border-color: var(--accent);
-      color: var(--paper);
-    }
-    .editor-btn-save:hover { opacity: 0.9; }
-
-    .editor-mount {
-      font-family: var(--font-body);
-      font-size: var(--reader-font-size, 17px);
-      line-height: 1.7;
-      min-height: 40vh;
-    }
-    /* CodeMirror fills the mount and inherits the reading font/size */
-    .editor-mount .cm-editor { height: 100%; }
-    .editor-mount .cm-scroller { padding-bottom: 4rem; }
-
     /* ── Main text ── */
     .main-text {
       grid-column: 1;
       padding-right: 1rem;
     }
+
+    /* ── Live editor (CodeMirror 6), mounted directly into #main-text ──
+       No mode toggle, no separate editor surface: #main-text *is* the CM6
+       parent element (see mountLiveEditor() in client.js). These rules
+       replace CodeMirror's default code-editor chrome (monospace font,
+       tight line-height, own background/padding) with the same reading
+       typography the old static-HTML view used, so editing looks
+       continuous with reading rather than switching to "a code editor". */
+    .main-text .cm-editor {
+      font-family: var(--font-body);
+      font-size: var(--reader-font-size, 17px);
+      line-height: 1.7;
+      min-height: 40vh;
+      background: transparent;
+      color: var(--ink);
+    }
+    .main-text .cm-editor.cm-focused { outline: none; }
+    .main-text .cm-scroller { font-family: inherit; overflow: visible; padding-bottom: 4rem; }
+    .main-text .cm-content { padding: 0; }
+    .main-text .cm-line { padding: 0; }
+    .main-text .cm-gutters { display: none; } /* no line numbers in a reading/writing surface */
+    .main-text .cm-selectionBackground { background: rgba(0,0,0,0.08) !important; }
+    .main-text .cm-cursor { border-left-color: var(--ink); }
+    .main-text .cm-activeLine { background: transparent; } /* live-preview marks already show the active line */
 
     .main-text h1 { font-size: 2rem;  color: var(--accent-h1); font-weight: 500; margin: 2.5rem 0 1rem; line-height: 1.25; }
     .main-text h2 { font-family: var(--font-ui); font-size: 1.8rem; letter-spacing: 0.14em; text-transform: uppercase; color: var(--accent); margin: 2.2rem 0 0.9rem; font-weight: 400; }
@@ -1028,8 +927,6 @@
       .sidebar-overlay.open { display: block; }
 
       .topbar { display: flex; }
-      .topbar-edit-toggle { display: flex; }
-      .edit-mode-toggle { display: none; } /* replaced by topbar-edit-toggle on mobile */
 
       .page-wrap {
         grid-template-columns: 1fr;
@@ -1042,10 +939,6 @@
       .chapter-header h1 { font-size: 1.6rem; }
 
       .main-text { grid-column: 1; padding-right: 0; }
-      .editor-wrap { grid-column: 1; padding-right: 0; }
-      .editor-toolbar { flex-direction: column; align-items: flex-start; gap: 0.6rem; }
-      .editor-toolbar-hint { display: none; } /* too cramped on small screens */
-      .edit-mode-toggle span { display: none; } /* icon-only on mobile to save topbar space */
 
       /* On mobile the margin column disappears — notes show as bottom sheet */
       .margin-col { display: none; }

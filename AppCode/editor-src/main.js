@@ -101,15 +101,51 @@ export function createLiveEditor({
         changes: { from: 0, to: view.state.doc.length, insert: text },
       });
     },
-    getNotes: () => findNoteMarkers(view.state.doc).map((m) => ({ id: m.id, type: m.type, content: m.content })),
-    /** Inserts `[mn: text]` (or `[mn.type: text]`) right after `to`. */
+    getNotes: () => findNoteMarkers(view.state.doc).map((m) => ({ id: m.id, type: m.type, content: m.content, charPos: m.from })),
+    /**
+     * Inserts `[mn: text]` (or `[mn.type: text]`) right after `to`. The
+     * cursor is placed *before* the new marker (at the original `to`), not
+     * inside or immediately after it — noteWidgets.js renders raw `[mn:
+     * ...]` text instead of the collapsed superscript widget whenever the
+     * selection touches the marker's range (so it stays editable), and a
+     * zero-width cursor sitting right at the marker's end still counts as
+     * touching it. Leaving the cursor just before the marker means the note
+     * renders as its usual widget immediately, matching every other note on
+     * the page, instead of sitting in "raw markdown" form until the next
+     * unrelated selection change moves the cursor off of it.
+     */
     insertNoteAt: (to, noteText, noteType) => {
       const tag = noteType ? `mn.${noteType}` : 'mn';
       const marker = `[${tag}: ${noteText}]`;
       view.dispatch({
         changes: { from: to, to, insert: marker },
-        selection: { anchor: to + marker.length },
+        selection: { anchor: to },
       });
+    },
+    /**
+     * Re-tags the note with the given `id` (1-based, order-of-appearance —
+     * same numbering findNoteMarkers/getNotes/onNotesChanged use) to
+     * `newType`, preserving its content. Re-locates the marker's current
+     * range in the live doc rather than trusting a caller-held offset, so
+     * this is safe to call even if the doc has shifted since the caller
+     * last read the note list (as long as the note count/order hasn't
+     * changed — same assumption the old server-side by-id write made).
+     * No-ops if a note with that id no longer exists.
+     */
+    retypeNoteById: (id, newType) => {
+      const marker = findNoteMarkers(view.state.doc).find((m) => m.id === id);
+      if (!marker) return false;
+      const tag = newType ? `mn.${newType}` : 'mn';
+      const replacement = `[${tag}: ${marker.content}]`;
+      view.dispatch({ changes: { from: marker.from, to: marker.to, insert: replacement } });
+      return true;
+    },
+    /** Deletes the note with the given `id`. No-ops if it no longer exists. */
+    removeNoteById: (id) => {
+      const marker = findNoteMarkers(view.state.doc).find((m) => m.id === id);
+      if (!marker) return false;
+      view.dispatch({ changes: { from: marker.from, to: marker.to, insert: '' } });
+      return true;
     },
     focus: () => view.focus(),
     destroy: () => view.destroy(),
