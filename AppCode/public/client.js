@@ -413,6 +413,33 @@ function mountLiveEditor(rawText, path) {
   });
 }
 
+// Workaround for the "stale inline note-superscript number" bug (see
+// BUG_HANDOFF_note_superscript_refresh.md): after any edit that shifts the
+// sequential id of notes below it (insert/delete/retype), CM6's incremental
+// redraw of the `sup.mn-marker` widgets below the edit point doesn't
+// reliably refresh every one of them. Two rounds of trying to fix CM6's
+// incremental decoration redraw itself did not resolve it even after
+// confirming rebuilds were live — see the handoff doc for the full
+// investigation. Neither of us has a browser to inspect the live DOM and
+// confirm *why* CM6's diffing misses these ranges, so rather than guess a
+// third time, this forces the one thing that's guaranteed to be correct:
+// fully tearing down and recreating the CM6 view from the post-edit
+// document text after any note mutation. It's heavier than an incremental
+// fix (briefly recreates the view, so that one action isn't undo-able with
+// Ctrl/Cmd+Z) but it can't leave a stale superscript behind, since every
+// widget is freshly built from the current text on remount. Scroll
+// position is preserved. Call this after insertNoteAt/retypeNoteById/
+// removeNoteById specifically — not after ordinary typing, which remains
+// fully incremental and unaffected.
+function remountAfterNoteMutation() {
+  if (!liveEditor || !editingPath) return;
+  const mainText = document.getElementById('main-text');
+  const scrollTop = mainText ? mainText.scrollTop : 0;
+  const text = liveEditor.getDoc();
+  mountLiveEditor(text, editingPath);
+  if (mainText) mainText.scrollTop = scrollTop;
+}
+
 // Flushes any pending debounced save immediately — used before navigating
 // away from a chapter so a fast switch never drops the last few keystrokes.
 // Must run (and resolve) BEFORE `currentPath`/`editingPath` are reassigned
@@ -898,6 +925,7 @@ async function saveNote() {
 
   try {
     liveEditor.insertNoteAt(pendingPos.charPos, text, selectedNoteType || null);
+    remountAfterNoteMutation();
     closeSheet();
   } finally {
     btn.disabled = false;
@@ -908,11 +936,13 @@ async function saveNote() {
 async function retypeNote(note, newType) {
   if (!editingPath || !liveEditor) return;
   liveEditor.retypeNoteById(note.id, newType);
+  remountAfterNoteMutation();
 }
 
 async function removeNote(noteId, charPos) {
   if (!editingPath || !liveEditor) return;
   liveEditor.removeNoteById(noteId);
+  remountAfterNoteMutation();
 }
 
 // ── Mobile sidebar ───────────────────────────────────────────────────────────

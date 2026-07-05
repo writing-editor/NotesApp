@@ -19,7 +19,7 @@ this is a book[mn: this note] about politics
 this is politics of hieghes[mn: test] order
 this is a book[mn: this note] about politics 
 
-this is politics of hieghes order
+this is politics of hieghes order[mn: test]
 this is a book[mn: this note] about politics 
 
 this is politics of hieghes order
