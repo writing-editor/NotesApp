@@ -6,8 +6,8 @@
 // The marker text stays live/editable: when the cursor is inside a
 // marker's range, the raw `[mn: ...]` text is shown instead of the widget,
 // exactly like the live-preview marks in livePreview.js.
-import { Decoration, ViewPlugin, WidgetType } from '@codemirror/view';
-import { RangeSetBuilder } from '@codemirror/state';
+import { Decoration, EditorView, WidgetType } from '@codemirror/view';
+import { StateField, RangeSetBuilder } from '@codemirror/state';
 
 // Same regex and same sequential (1-based, order-of-appearance) numbering
 // scheme as lib/parse.js / mobile-sw.js's parseMd, so note ids stay
@@ -74,8 +74,8 @@ export function findNoteMarkers(doc) {
   return markers;
 }
 
-function activeRanges(view) {
-  return view.state.selection.ranges.map((r) => [r.from, r.to]);
+function activeRanges(state) {
+  return state.selection.ranges.map((r) => [r.from, r.to]);
 }
 
 // Whether selection range [aFrom,aTo] genuinely overlaps marker range
@@ -92,10 +92,10 @@ function overlaps(aFrom, aTo, bFrom, bTo) {
   return aFrom < bTo && bFrom < aTo;
 }
 
-function buildDecorations(view) {
+function buildDecorations(state) {
   const builder = new RangeSetBuilder();
-  const markers = findNoteMarkers(view.state.doc);
-  const sel = activeRanges(view);
+  const markers = findNoteMarkers(state.doc);
+  const sel = activeRanges(state);
 
   for (const m of markers) {
     const isActive = sel.some(([f, t]) => overlaps(f, t, m.from, m.to));
@@ -111,30 +111,26 @@ function buildDecorations(view) {
   return builder.finish();
 }
 
-export const noteMarkerWidgets = ViewPlugin.fromClass(
-  class {
-    constructor(view) {
-      this.decorations = buildDecorations(view);
-    }
-    update(update) {
-      // Inserting/removing a note marker shifts every marker after it and
-      // changes line heights below the edit point. CM6 normally re-measures
-      // and redraws affected lines off the back of that same transaction,
-      // but that only reliably happens for viewport/geometry changes it
-      // already knows about — recomputing only on docChanged/selectionSet
-      // (as this used to) left already-drawn lines below the edit showing
-      // stale widgets until some other event (cursor entering that line,
-      // scrolling, a manual refresh) forced a fresh viewport pass. Also
-      // recomputing on viewportChanged/geometryChanged, and explicitly
-      // requesting a remeasure after doc edits, makes CM6 redraw those
-      // lines immediately instead of waiting on incidental user input.
-      if (update.docChanged || update.selectionSet || update.viewportChanged || update.geometryChanged) {
-        this.decorations = buildDecorations(update.view);
-      }
-      if (update.docChanged) {
-        update.view.requestMeasure();
-      }
-    }
+// A StateField, not a ViewPlugin. Widget decorations here previously came
+// from a ViewPlugin that recomputed reactively as part of the view-update
+// cycle — but that left a real bug: after inserting a note, every marker
+// below it (whose id/position shifted) could keep showing its old,
+// pre-shift number until something *else* forced a second view update on
+// that specific line (moving the cursor there, scrolling, a refresh). A
+// StateField's value is computed as part of the state transaction itself,
+// before the view decides what to draw, which is the same mechanism CM6's
+// own built-in decorations (search highlighting, lint markers, etc.) use
+// specifically because it can't drift out of sync with a single view's
+// redraw scheduling the way a ViewPlugin's reactive recompute can.
+export const noteMarkerWidgets = StateField.define({
+  create(state) {
+    return buildDecorations(state);
   },
-  { decorations: (plugin) => plugin.decorations }
-);
+  update(decorations, tr) {
+    if (tr.docChanged || tr.selection) {
+      return buildDecorations(tr.state);
+    }
+    return decorations;
+  },
+  provide: (field) => EditorView.decorations.from(field),
+});

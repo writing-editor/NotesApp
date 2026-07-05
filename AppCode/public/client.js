@@ -82,7 +82,7 @@ ws.onmessage = async e => {
 };
 
 // ── Manifest & navigation ────────────────────────────────────────────────────
-async function loadManifest() {
+async function loadManifest(isRetry = false) {
   let data;
   try {
     const res = await fetch('/api/manifest');
@@ -91,11 +91,23 @@ async function loadManifest() {
       if (res.status === 400) throw new Error('NO_VAULT');
       throw new Error('HTTP ' + res.status);
     }
-    data = await res.json();
+    try {
+      data = await res.json();
+    } catch {
+      // Not valid JSON — on mobile this happens when the fetch raced the
+      // Service Worker's own install/activate on a cold start (the request
+      // falls through to a plain HTML response before the SW is
+      // controlling the page, instead of being routed to the mobile
+      // backend). That's transient, so retry shortly before giving up.
+      if (!isRetry) { setTimeout(() => loadManifest(true), 400); return; }
+      throw new Error('NO_VAULT');
+    }
   } catch (e) {
     if (e.message === 'NO_VAULT') {
-      document.getElementById('page-wrap').innerHTML =
-        `<div class="state-msg">No vault selected.<br><small>Click the <b>Open Vault</b> button in the sidebar to set your book folder.</small></div>`;
+      const onNative = !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
+      document.getElementById('page-wrap').innerHTML = onNative
+        ? `<div class="state-msg">No manuscript loaded yet.<br><small>Open <b>Settings</b> and clone a repository to start reading and editing.</small></div>`
+        : `<div class="state-msg">No vault selected.<br><small>Click the <b>Open Vault</b> button in the sidebar to set your book folder.</small></div>`;
     } else {
       document.getElementById('page-wrap').innerHTML =
         `<div class="state-msg" style="color:#c0392b;">Could not load manifest: ${e.message}</div>`;
@@ -420,34 +432,41 @@ async function flushPendingSave() {
 }
 
 function buildScrollbarTOC() {
-  const mainText = document.getElementById('main-text');
   const tocPopup = document.getElementById('toc-popup');
-  if (!mainText || !tocPopup) return;
+  if (!tocPopup || !liveEditor) return;
 
   cachedTOCHeight = 0;
 
-  const headings = mainText.querySelectorAll('h1, h2, h3');
+  // Parse headings straight from the document text rather than querying
+  // rendered `<h1>/<h2>/<h3>` DOM nodes. CM6 only renders elements for
+  // lines currently near the viewport, so a DOM query silently misses any
+  // heading further down a long chapter — and even a heading that *is*
+  // currently rendered loses any `id` we assign it the next time CM6
+  // recycles that line's DOM (e.g. after scrolling it out and back into
+  // view), breaking the TOC's `#heading-N` link. Matching plain markdown
+  // ATX headings (`#`, `##`, `###`) at line start, same as lib/parse.js.
+  const text = liveEditor.getDoc();
+  const headingRe = /^(#{1,3})\s+(.+)$/gm;
+  const headings = [];
+  let match;
+  while ((match = headingRe.exec(text))) {
+    headings.push({ level: match[1].length, text: match[2].trim(), charPos: match.index });
+  }
+
   if (headings.length === 0) {
     tocPopup.innerHTML = '<div class="toc-link toc-h3">No headings in this chapter</div>';
     return;
   }
 
-  let html = ''; // No title, just seamless content
-  
-  headings.forEach((h, i) => {
-    const id = 'heading-' + i;
-    h.id = id; 
-    const level = h.tagName.toLowerCase(); 
-    html += `<a href="#${id}" class="toc-link toc-${level}">${h.textContent}</a>`;
-  });
-
-  tocPopup.innerHTML = html;
+  tocPopup.innerHTML = headings
+    .map((h, i) => `<a href="#" class="toc-link toc-h${h.level}" data-toc-index="${i}">${h.text}</a>`)
+    .join('');
 
   tocPopup.querySelectorAll('.toc-link').forEach(link => {
     link.addEventListener('click', e => {
       e.preventDefault();
-      const targetEl = document.querySelector(link.getAttribute('href'));
-      if (targetEl) targetEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      const h = headings[Number(link.dataset.tocIndex)];
+      if (h) liveEditor.scrollToPos(h.charPos);
     });
   });
 }

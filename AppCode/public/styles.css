@@ -301,7 +301,11 @@
     .main-text .cm-editor.cm-focused { outline: none; }
     .main-text .cm-scroller { font-family: inherit; overflow: visible; padding-bottom: 4rem; }
     .main-text .cm-content { padding: 0; }
-    .main-text .cm-line { padding: 0; }
+    .main-text .cm-line {
+      padding: 0;
+      text-align: justify;
+      hyphens: auto;
+    }
     .main-text .cm-gutters { display: none; } /* no line numbers in a reading/writing surface */
     .main-text .cm-selectionBackground { background: rgba(0,0,0,0.08) !important; }
     .main-text .cm-cursor { border-left-color: var(--ink); }
@@ -1521,8 +1525,6 @@
 .main-text li {
     font-size: var(--reader-font-size, 17px) !important;
 }
-
-/* File: AppCode/public/styles.css */
 
 /* Scale the margin note content proportionally (approx. 82% of body size) */
 .mn-chip,

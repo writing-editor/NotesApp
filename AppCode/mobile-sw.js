@@ -62,11 +62,20 @@ async function handleApiRequest(req, url) {
       return jsonResponse({ engine: 'mobile-sw-lightningfs', gitRoot: GIT_ROOT, vault: VAULT, tree });
     }
 
-    // ── Git: clone (first-time setup) ─────────────────────────────────
+    // ── Git: clone (first-time setup, or switching to a different repo) ─
     if (path === '/api/git/clone' && method === 'POST') {
       const { remoteUrl, token } = await req.json();
       if (!remoteUrl) return jsonResponse({ error: 'remoteUrl required' }, 400);
 
+      // isomorphic-git's clone() requires an empty target directory. On a
+      // fresh install GIT_ROOT doesn't exist yet, but on every clone after
+      // the first it's still full of the previous repo's files — clone()
+      // would fail, and since nothing ever cleared it, the only way to
+      // load a different repo used to be uninstalling/reinstalling the
+      // app (which wipes the Service Worker's IndexedDB-backed
+      // LightningFS). Wiping GIT_ROOT first makes re-cloning into another
+      // repo work the same way as the very first clone.
+      await rmrf(GIT_ROOT);
       await pfs.mkdir(GIT_ROOT).catch(() => {});
 
       await git.clone({
@@ -133,6 +142,14 @@ async function handleApiRequest(req, url) {
 
     // ── Manifest ───────────────────────────────────────────────────────
     if (path === '/api/manifest' && method === 'GET') {
+      // Nothing cloned yet — match server.js's contract (400 = "no vault")
+      // so client.js's existing friendly "no vault selected" message shows
+      // instead of buildManifest() silently returning empty defaults (which
+      // used to render a manifest for a book that doesn't exist), or worse,
+      // the raw "Unexpected token '<'" JSON-parse error some users saw when
+      // this fetch raced the Service Worker's own install/activate on a
+      // brand new install.
+      if (!(await isGitRepo())) return jsonResponse({ error: 'No vault selected' }, 400);
       return jsonResponse(await buildManifest());
     }
 
@@ -695,6 +712,21 @@ async function walk(dir, depth = 0) {
     out[entry] = stat.isDirectory() ? await walk(full, depth + 1) : 'file';
   }
   return out;
+}
+
+// LightningFS has no rm -rf; remove a directory tree by walking it and
+// deleting files before the (now-empty) directories that contained them.
+async function rmrf(dir) {
+  let entries;
+  try { entries = await pfs.readdir(dir); } catch { return; } // doesn't exist — nothing to do
+  for (const entry of entries) {
+    const full = `${dir}/${entry}`;
+    const stat = await pfs.stat(full).catch(() => null);
+    if (!stat) continue;
+    if (stat.isDirectory()) await rmrf(full);
+    else await pfs.unlink(full).catch(() => {});
+  }
+  await pfs.rmdir(dir).catch(() => {});
 }
 
 function jsonResponse(data, status = 200) {
