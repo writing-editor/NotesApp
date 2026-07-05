@@ -152,8 +152,8 @@ async function startServer(vaultPath) {
 // the title bar sits directly above the sidebar and should read as one
 // continuous panel with it.
 const THEME = {
-  paper: '#f4f2ef',
-  chrome: '#efecea',
+  paper: '#f4f2ee',
+  chrome: '#efece6',
   ink: '#1c1a18',
 };
 
@@ -163,13 +163,21 @@ function createWindow() {
     height: 860,
     minWidth: 760,
     minHeight: 540,
-    backgroundColor: THEME.paper,
+    backgroundColor: '#00000000',
     icon: path.join(__dirname, 'build-resources', 'icon.png'),
     // No native title bar/menu banner, and no OS-drawn border around it —
     // we draw our own minimal draggable strip (below) colored to match the
     // app so the window reads as one continuous surface instead of an app
     // sitting inside a separate grey title-bar panel.
     frame: false,
+    // Transparent + roundedCorners lets the page itself draw the window's
+    // actual rounded silhouette via CSS (below) — Electron/Linux doesn't
+    // round frameless window corners on its own, so without a transparent
+    // backdrop the true (square) window edge would show through behind our
+    // rounded content, like a photo frame poking out past a rounded photo.
+    transparent: true,
+    roundedCorners: true,
+    hasShadow: true,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -180,19 +188,34 @@ function createWindow() {
 
   mainWindow.loadURL(`http://127.0.0.1:${serverPort}/`);
 
-  // Inject a thin draggable title-bar strip with min/max/close buttons once
+  // Inject a slim draggable title-bar strip with min/max/close buttons once
   // the real page has loaded, rather than editing AppCode/public/index.html
   // (that file is shared with the mobile build, which has no window chrome
   // to speak of). The strip is split into two color zones lined up with the
   // sidebar boundary below it — sidebar-tone above the sidebar, paper-tone
   // above the reading pane — so it reads as a lid sitting on top of two
   // differently-colored panels rather than a single bar in a third color.
+  const TITLEBAR_H = 27;
+  const CORNER_R = 10;
+
   mainWindow.webContents.on('did-finish-load', () => {
     mainWindow.webContents.insertCSS(`
+      /* Window is transparent at the Electron level (see BrowserWindow
+         options) specifically so this radius on the real window content
+         is what gives the window its visible rounded silhouette — nothing
+         square shows through behind the curve. */
+      html {
+        border-radius: ${CORNER_R}px;
+        overflow: hidden !important;
+      }
+
       .__desktop-titlebar {
-        position: fixed; top: 0; left: 0; right: 0; height: 32px;
+        position: fixed; top: 0; left: 0; right: 0; height: ${TITLEBAR_H}px;
         display: flex; align-items: stretch;
         -webkit-app-region: drag;
+        border-top-left-radius: ${CORNER_R}px;
+        border-top-right-radius: ${CORNER_R}px;
+        overflow: hidden;
         z-index: 999999;
       }
       .__desktop-titlebar .__zone-sidebar {
@@ -203,19 +226,59 @@ function createWindow() {
       .__desktop-titlebar .__zone-paper {
         background: ${THEME.paper};
         flex: 1;
+        position: relative;
         display: flex; align-items: center; justify-content: flex-end;
       }
-      .__desktop-titlebar button {
+      .__desktop-titlebar .__title {
+        position: absolute; left: 0; right: 0; text-align: center;
+        font-family: var(--font-ui, monospace);
+        font-size: 0.68rem;
+        letter-spacing: 0.02em;
+        color: ${THEME.ink};
+        opacity: 0.6;
+        pointer-events: none;
+        white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+        padding: 0 140px; /* keep clear of the buttons on the right */
+      }
+      /* Round, VS Code / GNOME Files style window controls — a circular
+         hover/active backdrop behind a small centered glyph, rather than
+         Windows-style full-height rectangular buttons. */
+      .__desktop-titlebar .__btn-wrap {
         -webkit-app-region: no-drag;
-        width: 46px; height: 32px; border: none; background: transparent;
+        width: ${TITLEBAR_H}px; height: ${TITLEBAR_H}px;
+        display: flex; align-items: center; justify-content: center;
+      }
+      .__desktop-titlebar button {
+        width: 20px; height: 20px; border-radius: 50%;
+        border: none; background: transparent;
         color: ${THEME.ink}; opacity: 0.55; cursor: pointer;
         display: flex; align-items: center; justify-content: center;
-        font-family: sans-serif; font-size: 14px; line-height: 1;
+        font-family: sans-serif; font-size: 11px; line-height: 1;
         transition: background 0.12s, opacity 0.12s;
       }
-      .__desktop-titlebar button:hover { opacity: 1; background: rgba(0,0,0,0.06); }
+      .__desktop-titlebar button:hover { opacity: 1; background: rgba(0,0,0,0.08); }
       .__desktop-titlebar button.__close:hover { background: #c0392b; color: #fff; opacity: 1; }
-      body { padding-top: 32px !important; box-sizing: border-box; }
+      /* Extend the sidebar's own left/body divider line up through the
+         title bar, so the vertical rule reads as one continuous line from
+         the very top of the window down through the sidebar, instead of
+         stopping at the top of .sidebar. */
+      .__desktop-titlebar .__zone-sidebar {
+        border-right: 1px solid var(--rule);
+      }
+
+      /* Push the app shell down by the title bar's height instead of padding
+         body — body/html already carry the app's own 100vh/100% layout and
+         overflow:hidden rules, so adding padding to body made its box taller
+         than the window and produced a second, outer scrollbar alongside the
+         app's own inner ones. Shrinking .app itself keeps everything inside
+         a single viewport-height box with no second scroll context. */
+      body { overflow: hidden !important; height: 100% !important; }
+      .app {
+        height: calc(100vh - ${TITLEBAR_H}px) !important;
+        margin-top: ${TITLEBAR_H}px !important;
+        border-bottom-left-radius: ${CORNER_R}px;
+        border-bottom-right-radius: ${CORNER_R}px;
+      }
     `);
 
     mainWindow.webContents.executeJavaScript(`
@@ -226,9 +289,10 @@ function createWindow() {
         bar.innerHTML =
           '<div class="__zone-sidebar"></div>' +
           '<div class="__zone-paper">' +
-            '<button class="__min" title="Minimize">&#x2013;</button>' +
-            '<button class="__max" title="Maximize">&#x25A1;</button>' +
-            '<button class="__close" title="Close">&#x2715;</button>' +
+            '<span class="__title"></span>' +
+            '<div class="__btn-wrap"><button class="__min" title="Minimize">&#x2013;</button></div>' +
+            '<div class="__btn-wrap"><button class="__max" title="Maximize">&#x25A1;</button></div>' +
+            '<div class="__btn-wrap"><button class="__close" title="Close">&#x2715;</button></div>' +
           '</div>';
         document.body.prepend(bar);
         bar.querySelector('.__min').onclick = () => window.manuscriptDesktop.winMinimize();
@@ -249,6 +313,19 @@ function createWindow() {
         syncWidth();
         window.addEventListener('resize', syncWidth);
         if (sidebarEl) new ResizeObserver(syncWidth).observe(sidebarEl);
+
+        // Show the manuscript's title in the middle of the bar. #book-title
+        // is set from the manifest as soon as it loads (see loadManifest in
+        // client.js), which may be before or after this script runs, so
+        // read it now and also watch for later changes (e.g. switching to
+        // a different vault via File > Open Vault Folder).
+        var titleEl = bar.querySelector('.__title');
+        var bookTitleEl = document.getElementById('book-title');
+        function syncTitle() {
+          titleEl.textContent = (bookTitleEl && bookTitleEl.textContent) || document.title || '';
+        }
+        syncTitle();
+        if (bookTitleEl) new MutationObserver(syncTitle).observe(bookTitleEl, { childList: true, characterData: true, subtree: true });
       })();
     `);
   });
