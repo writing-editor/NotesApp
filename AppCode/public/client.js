@@ -5,10 +5,6 @@ let pendingPos       = null;
 let activeChip       = null;
 let activeMarker     = null;
 let selectedNoteType = '';
-let editingPara      = null;
-let editingStart     = null;
-let editingEnd       = null;
-let editingSaved     = false;
 let _progressTimer   = null;
 let _lastRenderedRaw = ''; // used to skip WS reloads that match what we already rendered
 let cachedTOCHeight  = 0;
@@ -68,7 +64,6 @@ const ws = new WebSocket(wsProto + '://' + location.host);
 ws.onmessage = async e => {
   const msg = JSON.parse(e.data);
   if ((msg.type === 'file-changed' || msg.type === 'file-added') && currentPath) {
-    if (editingPara) return; // don't interrupt an active legacy paragraph edit
     // Ask the server for the current vault root, then compute a relative path.
     // This avoids the hardcoded '/book/' split that breaks on any other folder name.
     try {
@@ -424,19 +419,6 @@ async function flushPendingSave() {
     .catch(() => setSaveStatus('Save failed'));
 }
 
-// ── Legacy no-op guards ───────────────────────────────────────────────────────
-// editingPara should never be set anymore now that paragraph-by-paragraph
-// contentEditable editing (and, later, the whole-doc CodeMirror edit-mode
-// toggle) has been replaced by the always-on live editor mounted in
-// mountLiveEditor() above. Kept only because the WS handler still checks
-// `editingPara` defensively.
-async function exitEditMode(save) {
-  editingPara  = null;
-  editingStart = null;
-  editingEnd   = null;
-  editingSaved = false;
-}
-
 function buildScrollbarTOC() {
   const mainText = document.getElementById('main-text');
   const tocPopup = document.getElementById('toc-popup');
@@ -502,12 +484,35 @@ function positionChips() {
   // lines this note's content could fill if given unlimited room) before
   // touching the DOM, so we can resolve the whole cluster in one pass.
   const items = [];
+  const hasMetrics = liveEditor && typeof liveEditor.getNoteMetrics === 'function';
   currentNotes.forEach(note => {
+    // Still grab the live DOM anchor when it happens to be rendered — used
+    // for the click-passthrough binding and active-marker highlight always,
+    // and as a positioning fallback below if needed.
     const anchor = mainText.querySelector(`.mn-anchor[data-note-id="${note.id}"]`);
-    if (!anchor) return;
 
-    const aRect      = anchor.getBoundingClientRect();
-    const naturalTop = aRect.top + scrollTop - marginTop;
+    // Position from CM6's height map (works even if this note is currently
+    // scrolled out of the rendered viewport), not from the `.mn-anchor` DOM
+    // node — CM6 only mounts DOM for lines near the viewport, so a
+    // DOM-only lookup silently drops any note below/above what's currently
+    // drawn until the user scrolls near it (or the page is refreshed and
+    // happens to draw that range). See editor-src/main.js#getNoteMetrics.
+    //
+    // Fallback: if the mounted editor bundle predates getNoteMetrics (stale
+    // build — see AppCode/package.json's build:editor script), use the old
+    // DOM-rect approach so notes that ARE currently rendered still show up,
+    // rather than silently rendering nothing.
+    let metrics = null;
+    if (hasMetrics && note.charPos != null) {
+      metrics = liveEditor.getNoteMetrics(note.charPos);
+    }
+    if (!metrics) {
+      if (!anchor) return;
+      const aRect = anchor.getBoundingClientRect();
+      metrics = { top: aRect.top, height: aRect.height };
+    }
+
+    const naturalTop = metrics.top + scrollTop - marginTop;
 
     // Rough estimate of how many lines the full note would need to render
     // without clamping — used both as an upper bound and as a "weight" when
@@ -519,7 +524,7 @@ function positionChips() {
       note,
       anchor,
       naturalTop,
-      connectorTop: aRect.height / 2,
+      connectorTop: metrics.height / 2,
       desiredLines,
     });
   });
@@ -665,7 +670,9 @@ function positionChips() {
     chip.addEventListener('click', () => openPopup(note, chip, anchor));
     // Bind the inline superscript too — covers both desktop hover and mobile tap.
     // This is the only binding site; the old second sweep below was adding duplicates.
-    const marker = anchor.querySelector('.mn-marker');
+    // `anchor` may be null here if this note's line isn't currently rendered
+    // by CM6 (see the getNoteMetrics comment above) — nothing to bind in that case.
+    const marker = anchor ? anchor.querySelector('.mn-marker') : null;
     if (marker) marker.addEventListener('click', () => openPopup(note, chip, anchor));
 
     marginCol.appendChild(chip);
@@ -722,6 +729,9 @@ function openPopup(note, chip, anchor) {
 
   popup.classList.add('open');
   if (chip) { chip.classList.add('active-chip'); activeChip = chip; }
+  // `anchor` is only present when this note's line happens to be currently
+  // rendered by CM6 — absent for offscreen notes, which is fine here since
+  // this is just a highlight, not the popup's actual content/position.
   if (anchor) { anchor.querySelector('.mn-marker')?.classList.add('active'); activeMarker = anchor.querySelector('.mn-marker'); }
 }
 

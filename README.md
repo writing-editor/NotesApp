@@ -73,6 +73,59 @@ Without write access, cloning and reading will work, but **Push will fail with a
 
 ## Part 2 — For the developer (or an LLM picking this project back up)
 
+### The frontend editor (CodeMirror 6) — read this before touching `public/client.js`
+
+The reading/editing surface used to be server-rendered static HTML with two
+modes: a read-only render and a paragraph-by-paragraph `contenteditable`
+edit mode (per-paragraph `[data-block]` fetch/save via `/api/block`, with
+`.txt-seg`/`data-seg` spans marking individually-addressable text runs, and
+`.md-bold-syntax`/`.md-em-syntax` classes for in-place syntax highlighting).
+
+That has been **replaced by a single always-on CodeMirror 6 instance**,
+built from `AppCode/editor-src/*.js` into `public/mn-editor.bundle.js`
+(see `editor-src/build.js`) and mounted once per chapter by
+`mountLiveEditor()` in `public/client.js`:
+
+- `editor-src/main.js` — creates the CM6 `EditorView` and wires its
+  callbacks (`onChange`, `onNotesChanged`, `onLayoutChanged`, selection
+  events) into `client.js`.
+- `editor-src/livePreview.js` — Obsidian-style live preview: hides markdown
+  syntax marks (`#`, `**`, etc.) except on the line the cursor is on.
+- `editor-src/noteWidgets.js` — renders `[mn: ...]` / `[mn.type: ...]`
+  markers as the same `span.mn-anchor > sup.mn-marker` markup the old
+  server-side `parseMd()` produced, so `styles.css` and the margin-chip
+  logic in `client.js` didn't need to change.
+- `editor-src/marginSync.js` — tells `client.js` when the note list/layout
+  needs recomputing.
+
+Whole-file text now goes through `/api/raw` (GET on chapter load, debounced
+PUT on every change) instead of per-paragraph `/api/block` calls. The old
+`p[contenteditable]` / `.txt-seg` CSS, the `editingPara`/`editingStart`/
+`editingEnd`/`editingSaved` state in `client.js`, and the `/api/block`
+GET+PUT routes in both `server.js` and `mobile-sw.js` were artifacts of that
+retired architecture with nothing left calling/producing them — all
+removed. If you ever need per-block editing again, it's recoverable from
+git history, but the current single-CM6-instance model has no use for it.
+
+**Known CM6 gotcha (fixed, but worth understanding if related bugs
+resurface):** CodeMirror 6 only renders DOM nodes for lines inside (or very
+near) the current scroll viewport — unlike the old static-HTML view, it
+does not keep the whole document mounted. `positionChips()` in `client.js`
+used to look up each note's position with
+`document.querySelector('.mn-anchor[data-note-id=...]')`; for any note
+below/above what CM6 currently has drawn, that query returned nothing, so
+the note's margin chip simply never appeared — until the user scrolled (or
+put the cursor on) that line, which forced CM6 to draw it, or until a full
+page reload happened to draw that range on first paint. This is what caused
+"add a note in the middle → notes further down vanish until you scroll past
+them or refresh." The fix: `editor-src/main.js` exposes
+`getNoteMetrics(charPos)`, which reads CM6's internal height map via
+`view.lineBlockAt()` — this works for any position in the document whether
+or not it's currently drawn — and `positionChips()` now uses that for every
+note's vertical position instead of the DOM lookup. The DOM anchor is still
+looked up opportunistically (only for click binding / active-state
+highlighting, both of which degrade gracefully if it's absent).
+
 ### Why this project looks the way it does
 
 This app began as a normal Node.js/Express server (`AppCode/server.js`) meant to run on a laptop, reading and writing real files on disk, and using `simple-git`/native git for sync. The **mobile pivot** need was: ship the same app as an Android APK, with **no server to run** — a phone can't host a persistent backend process the way a laptop can.
@@ -124,7 +177,6 @@ They register on the same scope with similar-looking cache names. **If the wrong
 | `GET/POST /api/git/config` | ✅ implemented, persisted to `git-config.json` in LightningFS (token deliberately excluded) |
 | `GET /api/manifest` | ✅ implemented, reads `_meta.md` YAML frontmatter or falls back to first-line heuristics |
 | `GET /api/chapter` | ✅ implemented, full `parseMd()` port — not a stub |
-| `GET/PUT /api/block` | ✅ implemented — powers click-to-edit |
 | `POST/DELETE/PATCH /api/note` | ✅ implemented — add/remove/retype margin notes |
 | `GET/POST /api/progress` | ✅ implemented |
 | `GET /api/export/pdf` | ❌ intentionally 501s — Puppeteer/Typst can't run in-browser; tell the user to use the laptop app |
@@ -167,6 +219,7 @@ Read, in this order:
 2. `AppCode/server.js` and `AppCode/lib/git-sync.js` — the laptop reference implementation; the mobile port must stay behaviorally equivalent to this.
 3. `AppCode/mobile-sw.js` — the actual mobile backend.
 4. `AppCode/public/client.js` — the shared frontend, works against either backend.
+5. `AppCode/editor-src/*.js` (and the "frontend editor" section above) — the CodeMirror 6 editor that `client.js` mounts; read this before changing anything related to editing, note markers, or margin-chip layout.
 
 Before adding any new route or feature: check whether it already exists in `server.js` first. If it does, port it into `mobile-sw.js` following the same LightningFS/isomorphic-git patterns already established there rather than inventing a new approach. If it's genuinely laptop-only (filesystem browsing, PDF export via Puppeteer/Typst), don't port it — stub it with a clear error message instead, as done for `/api/export/pdf`.
 

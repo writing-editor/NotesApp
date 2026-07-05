@@ -159,53 +159,6 @@ async function handleApiRequest(req, url) {
       }
     }
 
-    // ── Read raw block (for inline edit) ──────────────────────────────
-    if (path === '/api/block' && method === 'GET') {
-      const relParam = url.searchParams.get('path');
-      const startParam = url.searchParams.get('start');
-      if (!relParam || startParam === null) return jsonResponse({ error: 'path, start required' }, 400);
-      const relPath = decodeURIComponent(relParam).replace(/\\/g, '/');
-      const full = `${VAULT}/${relPath}`;
-
-      let raw;
-      try {
-        raw = await pfs.readFile(full, 'utf8');
-      } catch {
-        return jsonResponse({ error: 'not found' }, 404);
-      }
-
-      const startChar = parseInt(startParam, 10);
-      let end = startChar;
-      while (end < raw.length) {
-        const nl = raw.indexOf('\n', end);
-        if (nl === -1) { end = raw.length; break; }
-        const afterNl = nl + 1;
-        if (afterNl >= raw.length || raw[afterNl] === '\n' || raw[afterNl] === '\r') { end = nl; break; }
-        end = afterNl;
-      }
-
-      const blockRaw = raw.slice(startChar, end);
-      return jsonResponse({ raw: blockRaw, start: startChar, end });
-    }
-
-    // ── Save edited block ──────────────────────────────────────────────
-    if (path === '/api/block' && method === 'PUT') {
-      const { path: relPath, start, end, text } = await req.json();
-      if (!relPath || start === undefined || end === undefined || text === undefined) {
-        return jsonResponse({ error: 'path, start, end, text required' }, 400);
-      }
-      const normPath = relPath.replace(/\\/g, '/');
-      const fullPath = `${VAULT}/${normPath}`;
-
-      const raw = await pfs.readFile(fullPath, 'utf8');
-      const updated = raw.slice(0, start) + text.trimEnd() + raw.slice(end);
-      await pfs.writeFile(fullPath, updated, 'utf8');
-
-      // No autoCommit — staged only; committed in bulk on Push.
-      new BroadcastChannel('manuscript-events').postMessage({ type: 'file-changed', path: normPath });
-      return jsonResponse({ ok: true });
-    }
-
     // ── Whole-file raw markdown (CodeMirror full-chapter edit mode) ─────
     // Mirrors server.js's /api/raw exactly, backed by LightningFS instead
     // of the real filesystem. Previously missing here entirely, which is

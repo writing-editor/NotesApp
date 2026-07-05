@@ -147,6 +147,33 @@ export function createLiveEditor({
       view.dispatch({ changes: { from: marker.from, to: marker.to, insert: '' } });
       return true;
     },
+    /**
+     * Returns this note's vertical position/height in *client* (viewport)
+     * coordinates, computed from CM6's internal height map via
+     * `view.lineBlockAt()` rather than by looking up the rendered
+     * `.mn-anchor` DOM node. This matters because CM6 only renders DOM for
+     * lines inside (or very near) the current viewport — it does NOT keep
+     * every widget in the document mounted the way the old server-rendered
+     * static HTML did. A note anchor that's currently scrolled out of view
+     * simply has no DOM element, so any positioning logic that does
+     * `document.querySelector('.mn-anchor[data-note-id=...]')` will find
+     * nothing for it until that part of the document happens to scroll (or
+     * get re-rendered on refresh) into the drawn range. `lineBlockAt`
+     * doesn't have that limitation — CM6 maintains height estimates for the
+     * whole document up front, refined as lines are actually measured — so
+     * this returns a usable position even for offscreen/undrawn notes.
+     */
+    getNoteMetrics: (charPos) => {
+      const pos = Math.max(0, Math.min(charPos, view.state.doc.length));
+      const block = view.lineBlockAt(pos);
+      const scrollRect = view.scrollDOM.getBoundingClientRect();
+      const top = scrollRect.top - view.scrollDOM.scrollTop + block.top;
+      return { top, height: block.height };
+    },
+    /** Moves the cursor to `charPos` and asks CM6 to scroll/render it into view (forces the widget/DOM to exist there). */
+    scrollToPos: (charPos) => {
+      view.dispatch({ selection: { anchor: charPos }, scrollIntoView: true });
+    },
     focus: () => view.focus(),
     destroy: () => view.destroy(),
   };

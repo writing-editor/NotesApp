@@ -452,69 +452,9 @@ app.get('/api/chapter', (req, res) => {
   }
 });
 
-// Fetch raw source of a single block (for inline editing)
-app.get('/api/block', (req, res) => {
-  if (!VAULT) return res.status(400).json({ error: 'No vault selected' });
-  const { path: rel, start } = req.query;
-  if (!rel || start === undefined) return res.status(400).json({ error: 'path, start required' });
-
-  const relNorm  = rel.replace(/\\/g, '/');
-  const full     = path.join(VAULT, relNorm);
-  const resolved = path.resolve(full);
-  if (!resolved.startsWith(path.resolve(VAULT))) return res.status(403).json({ error: 'forbidden' });
-  if (!fs.existsSync(full)) return res.status(404).json({ error: 'not found' });
-
-  const raw       = fs.readFileSync(full, 'utf8');
-  const startChar = parseInt(start, 10);
-
-  // Walk forward from startChar to the end of the block (next blank line or EOF)
-  let end = startChar;
-  while (end < raw.length) {
-    const nl = raw.indexOf('\n', end);
-    if (nl === -1) { end = raw.length; break; }
-    // Peek at line after this newline — if it's blank (or EOF), block ends here
-    const afterNl = nl + 1;
-    if (afterNl >= raw.length || raw[afterNl] === '\n' || raw[afterNl] === '\r') {
-      end = nl;
-      break;
-    }
-    end = afterNl;
-  }
-
-  const blockRaw = raw.slice(startChar, end);
-  res.json({ raw: blockRaw, start: startChar, end });
-});
-
-// Save edited block text back to file
-app.put('/api/block', (req, res) => {
-  if (!VAULT) return res.status(400).json({ error: 'No vault selected' });
-  const { path: rel, start, end, text } = req.body;
-  if (!rel || start === undefined || end === undefined || text === undefined) {
-    return res.status(400).json({ error: 'path, start, end, text required' });
-  }
-
-  const relNorm  = rel.replace(/\\/g, '/');
-  const full     = path.join(VAULT, relNorm);
-  const resolved = path.resolve(full);
-  if (!resolved.startsWith(path.resolve(VAULT))) return res.status(403).json({ error: 'forbidden' });
-
-  try {
-    const raw     = fs.readFileSync(full, 'utf8');
-    const updated = raw.slice(0, start) + text.trimEnd() + raw.slice(end);
-    const tmp     = full + '.tmp';
-    fs.writeFileSync(tmp, updated, 'utf8');
-    fs.renameSync(tmp, full);
-    // No autoCommit — staged only; committed in bulk on Push.
-    res.json({ ok: true });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
-
 // Whole-file raw markdown — used by the full-chapter CodeMirror edit mode.
-// Unlike /api/block, this reads/writes the entire file as one string, so a
-// single edit session can touch multiple paragraphs without the old
-// one-block-at-a-time constraint.
+// Reads/writes the entire file as one string, so a single edit session can
+// touch multiple paragraphs in one save.
 app.get('/api/raw', (req, res) => {
   if (!VAULT) return res.status(400).json({ error: 'No vault selected' });
   const { path: rel } = req.query;

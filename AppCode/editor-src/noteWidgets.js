@@ -37,7 +37,13 @@ class NoteAnchorWidget extends WidgetType {
     span.dataset.noteId = String(this.id);
     const sup = document.createElement('sup');
     sup.className = 'mn-marker';
-    sup.textContent = String(this.id);
+    // No textContent here — the visible number comes from a CSS counter
+    // (see styles.css's `.mn-marker::before`), which recomputes purely
+    // from DOM order on every layout pass. That's deliberate: CM6 doesn't
+    // reliably redraw every marker below an edit the instant note count
+    // changes, so a number baked in here via JS can go stale until the
+    // user interacts with that specific line. `data-note-id` (above) still
+    // carries this widget's real id for margin-chip binding/lookup.
     span.appendChild(sup);
     return span;
   }
@@ -72,8 +78,18 @@ function activeRanges(view) {
   return view.state.selection.ranges.map((r) => [r.from, r.to]);
 }
 
+// Whether selection range [aFrom,aTo] genuinely overlaps marker range
+// [bFrom,bTo] — i.e. shares interior space, not just a touching edge.
+// A zero-width caret sitting exactly at a marker's `from` or `to` boundary
+// (e.g. right after insertNoteAt places the cursor "before" a freshly
+// inserted marker) must NOT count as touching it, or the marker would show
+// its raw `[mn: ...]` text instead of collapsing to the widget immediately
+// — the opposite of what insertNoteAt is documented to do. Strict
+// inequalities on both sides give that: a caret exactly on either boundary
+// no longer overlaps, while a caret or selection genuinely inside the
+// marker still does.
 function overlaps(aFrom, aTo, bFrom, bTo) {
-  return aFrom <= bTo && bFrom <= aTo;
+  return aFrom < bTo && bFrom < aTo;
 }
 
 function buildDecorations(view) {
@@ -101,8 +117,22 @@ export const noteMarkerWidgets = ViewPlugin.fromClass(
       this.decorations = buildDecorations(view);
     }
     update(update) {
-      if (update.docChanged || update.selectionSet) {
+      // Inserting/removing a note marker shifts every marker after it and
+      // changes line heights below the edit point. CM6 normally re-measures
+      // and redraws affected lines off the back of that same transaction,
+      // but that only reliably happens for viewport/geometry changes it
+      // already knows about — recomputing only on docChanged/selectionSet
+      // (as this used to) left already-drawn lines below the edit showing
+      // stale widgets until some other event (cursor entering that line,
+      // scrolling, a manual refresh) forced a fresh viewport pass. Also
+      // recomputing on viewportChanged/geometryChanged, and explicitly
+      // requesting a remeasure after doc edits, makes CM6 redraw those
+      // lines immediately instead of waiting on incidental user input.
+      if (update.docChanged || update.selectionSet || update.viewportChanged || update.geometryChanged) {
         this.decorations = buildDecorations(update.view);
+      }
+      if (update.docChanged) {
+        update.view.requestMeasure();
       }
     }
   },
