@@ -145,11 +145,15 @@ async function startServer(vaultPath) {
 }
 
 // ── Window ───────────────────────────────────────────────────────────────
-// The app's own paper/ink theme (AppCode/public/styles.css :root), duplicated
+// The app's own theme colors (AppCode/public/styles.css :root), duplicated
 // here so the native window chrome can match it instead of looking like a
-// separate grey OS panel stuck on top of the app.
+// separate grey OS panel stuck on top of the app. Uses the same tone as the
+// sidebar (--margin-bg) rather than the lighter main-body (--paper), since
+// the title bar sits directly above the sidebar and should read as one
+// continuous panel with it.
 const THEME = {
-  paper: '#f4f2ee',
+  paper: '#f4f2ef',
+  chrome: '#efecea',
   ink: '#1c1a18',
 };
 
@@ -179,16 +183,27 @@ function createWindow() {
   // Inject a thin draggable title-bar strip with min/max/close buttons once
   // the real page has loaded, rather than editing AppCode/public/index.html
   // (that file is shared with the mobile build, which has no window chrome
-  // to speak of). Colors are pulled from THEME above so this can never drift
-  // out of sync with a change to styles.css without someone noticing here.
+  // to speak of). The strip is split into two color zones lined up with the
+  // sidebar boundary below it — sidebar-tone above the sidebar, paper-tone
+  // above the reading pane — so it reads as a lid sitting on top of two
+  // differently-colored panels rather than a single bar in a third color.
   mainWindow.webContents.on('did-finish-load', () => {
     mainWindow.webContents.insertCSS(`
       .__desktop-titlebar {
         position: fixed; top: 0; left: 0; right: 0; height: 32px;
-        display: flex; align-items: center; justify-content: flex-end;
-        background: ${THEME.paper};
+        display: flex; align-items: stretch;
         -webkit-app-region: drag;
         z-index: 999999;
+      }
+      .__desktop-titlebar .__zone-sidebar {
+        background: ${THEME.chrome};
+        flex-shrink: 0;
+        transition: width 0.28s ease; /* matches .sidebar's own collapse transition */
+      }
+      .__desktop-titlebar .__zone-paper {
+        background: ${THEME.paper};
+        flex: 1;
+        display: flex; align-items: center; justify-content: flex-end;
       }
       .__desktop-titlebar button {
         -webkit-app-region: no-drag;
@@ -209,13 +224,31 @@ function createWindow() {
         var bar = document.createElement('div');
         bar.className = '__desktop-titlebar';
         bar.innerHTML =
-          '<button class="__min" title="Minimize">&#x2013;</button>' +
-          '<button class="__max" title="Maximize">&#x25A1;</button>' +
-          '<button class="__close" title="Close">&#x2715;</button>';
+          '<div class="__zone-sidebar"></div>' +
+          '<div class="__zone-paper">' +
+            '<button class="__min" title="Minimize">&#x2013;</button>' +
+            '<button class="__max" title="Maximize">&#x25A1;</button>' +
+            '<button class="__close" title="Close">&#x2715;</button>' +
+          '</div>';
         document.body.prepend(bar);
         bar.querySelector('.__min').onclick = () => window.manuscriptDesktop.winMinimize();
         bar.querySelector('.__max').onclick = () => window.manuscriptDesktop.winMaximizeToggle();
         bar.querySelector('.__close').onclick = () => window.manuscriptDesktop.winClose();
+
+        // Keep the sidebar-colored zone's width lined up with the real
+        // .sidebar element below it — it animates on collapse/expand and
+        // disappears entirely at the mobile breakpoint (off-canvas), so this
+        // is read live off the actual element rather than a fixed constant.
+        var sidebarZone = bar.querySelector('.__zone-sidebar');
+        var sidebarEl = document.querySelector('.sidebar');
+        function syncWidth() {
+          if (!sidebarEl) return;
+          var mobile = window.matchMedia('(max-width: 768px)').matches;
+          sidebarZone.style.width = mobile ? '0px' : sidebarEl.getBoundingClientRect().width + 'px';
+        }
+        syncWidth();
+        window.addEventListener('resize', syncWidth);
+        if (sidebarEl) new ResizeObserver(syncWidth).observe(sidebarEl);
       })();
     `);
   });
