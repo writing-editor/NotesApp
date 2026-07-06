@@ -1272,6 +1272,7 @@ loadManifest();
   const tokenInput        = document.getElementById('git-token');
   const tokenSection       = document.getElementById('git-token-section');
   const tokenNote          = document.getElementById('git-token-note');
+  const tokenNoteText      = document.getElementById('git-token-note-text');
   const authorNameInput   = document.getElementById('git-author-name');
   const authorEmailInput  = document.getElementById('git-author-email');
   const saveConfigBtn      = document.getElementById('git-save-config');
@@ -1292,19 +1293,32 @@ loadManifest();
   // how the local `git` CLI is configured on that machine. So every platform
   // needs *some* token, not just mobile — the old "laptop: rely on system git
   // credentials" assumption below was wrong and caused 401s on Electron/laptop
-  // pushes and pulls. The two functions below are the single integration point
-  // so the rest of this file never has to know which storage backend is in play:
+  // pushes and pulls. The functions below are the single integration point so
+  // the rest of this file never has to know which storage backend is in play:
   //   - native (Capacitor/mobile): capacitor-secure-storage-plugin, actually encrypted.
-  //   - everywhere else (laptop browser, Electron): localStorage. This is NOT
-  //     encrypted — it's plain-text on disk (browser profile / Electron's
-  //     userData). Good enough to avoid retyping a PAT every session, but the
-  //     token-field note in Settings must be honest about this; don't upgrade
-  //     that copy to imply real secure storage until it is one.
+  //   - Electron (desktop): main-process safeStorage via the preload bridge
+  //     (window.manuscriptDesktop) — backed by the OS keyring (libsecret/
+  //     kwallet on Linux, Keychain on macOS, DPAPI on Windows). Actually
+  //     encrypted at rest, and persists across restarts, so the token
+  //     doesn't need retyping every launch.
+  //   - plain browser (laptop, no Electron/Capacitor bridge available):
+  //     localStorage. This is NOT encrypted — it's plain-text on disk
+  //     (browser profile). Good enough to avoid retyping a PAT every
+  //     session, but the token-field note in Settings must be honest about
+  //     this; don't upgrade that copy to imply real secure storage until it
+  //     is one. Electron also falls back here if the OS has no keyring
+  //     backend available (rare — e.g. libsecret missing on a minimal Linux
+  //     install); tokenStorageDescription() below reflects that case too.
+  const hasElectronTokenBridge = () => !!(window.manuscriptDesktop && window.manuscriptDesktop.getStoredToken);
+
   async function getStoredToken() {
     try {
       if (isNative() && window.Capacitor?.Plugins?.SecureStoragePlugin) {
         const { value } = await window.Capacitor.Plugins.SecureStoragePlugin.get({ key: 'git-pat' });
         return value || '';
+      }
+      if (hasElectronTokenBridge()) {
+        return (await window.manuscriptDesktop.getStoredToken()) || '';
       }
       return window.localStorage.getItem('git-pat') || '';
     } catch { /* not set yet or plugin/storage error */ }
@@ -1317,10 +1331,37 @@ loadManifest();
         await window.Capacitor.Plugins.SecureStoragePlugin.set({ key: 'git-pat', value: token });
         return;
       }
+      if (hasElectronTokenBridge()) {
+        const result = await window.manuscriptDesktop.setStoredToken(token);
+        if (result && result.ok) return;
+        // OS keyring unavailable — fall back to localStorage rather than
+        // silently losing the token, but keep it out of sync with the
+        // (now stale) encrypted-storage assumption in the UI note.
+        console.warn('[settings] OS keyring unavailable, falling back to localStorage:', result && result.reason);
+        window.localStorage.setItem('git-pat', token);
+        return;
+      }
       window.localStorage.setItem('git-pat', token);
     } catch (e) {
       console.error('[settings] failed to store token:', e.message);
     }
+  }
+
+  // Drives the honest-storage-description note under the token field. Kept
+  // as a small async function (rather than a static string) because the
+  // Electron case has two different real answers depending on whether the
+  // OS keyring actually came up.
+  async function tokenStorageDescription() {
+    if (isNative()) {
+      return 'Stored in this device\u2019s secure storage, encrypted.';
+    }
+    if (hasElectronTokenBridge()) {
+      const available = await window.manuscriptDesktop.isTokenEncryptionAvailable();
+      return available
+        ? 'Stored encrypted in your OS keyring, and remembered across restarts.'
+        : 'Your OS has no secure keyring available, so this is stored unencrypted in local storage instead.';
+    }
+    return 'Stored in this browser\u2019s local storage, unencrypted.';
   }
 
   function openSettings() {
@@ -1328,7 +1369,8 @@ loadManifest();
     // The token field is needed on every platform now (see note above) —
     // only the helper text under it changes based on storage strength.
     tokenSection.style.display = '';
-    tokenNote.style.display = isNative() ? 'none' : '';
+    tokenNote.style.display = '';
+    tokenStorageDescription().then(text => { tokenNoteText.textContent = text; });
 
     fetch('/api/git/config').then(r => r.json()).then(cfg => {
       remoteUrlInput.value   = cfg.remoteUrl   || '';

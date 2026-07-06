@@ -83,7 +83,7 @@ This build is a thin native wrapper: it starts the exact same `AppCode/server.js
 
 Without write access, cloning and reading will work, but **Push will fail with a 401 error.**
 
-On the laptop and desktop app, the token is stored in local storage, unencrypted. On the phone, it's stored in the device's secure storage instead.
+On the desktop (Electron) app, the token is encrypted at rest using the OS's own keyring (libsecret/kwallet on Linux, Keychain on macOS, DPAPI on Windows) via Electron's `safeStorage`, and is remembered across restarts — no retyping it every launch. If a machine has no OS keyring backend available (rare on a minimal Linux install missing `libsecret`), the desktop app falls back to local storage, unencrypted, and says so in the Settings panel. On the laptop (plain browser, no Electron), the token is stored in local storage, unencrypted, since there's no OS keyring to hand from a browser tab. On the phone, it's stored in the device's secure storage instead.
 
 **Known current limitation:** conflict resolution (if you edit the same file on two devices before syncing) isn't handled gracefully yet — if you hit a conflict, resolve it from the laptop or desktop app for now.
 
@@ -110,6 +110,13 @@ The reading/editing surface is a single always-on CodeMirror 6 instance, built f
 - `editor-src/marginSync.js` — tells `client.js` when the note list/layout needs recomputing.
 
 Whole-file text goes through `/api/raw` (GET on chapter load, debounced PUT on every change).
+
+**`public/mn-editor.bundle.js` is a compiled build artifact, not a source file — never edit it directly, and never hand it back to the user as a "changed file."** It's generated from `editor-src/*.js` by `npm run build:editor` (`editor-src/build.js`, esbuild), and both packaging pipelines rebuild it themselves before it ever reaches an end user:
+- **Electron (desktop):** `AppCode/  ──npm install, npm run build:editor──▶` (see the build pipeline diagram below) rebuilds it as part of packaging the `.AppImage`/`.deb`.
+- **Capacitor (mobile):** `mobile/scripts/sync-server-files.js` copies whatever is currently in `public/mn-editor.bundle.js`, and the mobile CI workflow runs `npm run build:editor` first so it copies a fresh build, not a stale one.
+- **Server mode (laptop/browser):** whoever runs `node server.js` is expected to have run `npm run build:editor` themselves first.
+
+So if you (an LLM) change anything under `editor-src/`, that source change is the actual deliverable — rebuilding the bundle locally to sanity-check it compiles is fine, but don't present the rebuilt `mn-editor.bundle.js`/`.map` as one of "the files that changed." Each build pipeline regenerates it on its own, and handing over a bundle built in a throwaway sandbox risks it going stale or drifting from what CI actually produces. If you must verify the source change works, rebuild it locally, check it, then discard the output — only the `editor-src/*.js` diff should ship.
 
 **CM6 gotcha worth knowing:** CodeMirror 6 only renders DOM nodes for lines inside (or very near) the current scroll viewport. Looking up a note's position with `document.querySelector('.mn-anchor[data-note-id=...]')` fails for any note below/above what CM6 has currently drawn. Fix: `editor-src/main.js` exposes `getNoteMetrics(charPos)`, which reads CM6's internal height map via `view.lineBlockAt()` — this works for any position whether or not it's currently drawn — and `positionChips()` in `client.js` uses that for vertical positioning instead of a DOM lookup.
 
@@ -157,7 +164,7 @@ They register on the same scope with similar-looking cache names. If the wrong o
 
 5. **Path prefixing for git operations.** `isomorphic-git`'s `dir` is always `GIT_ROOT`, never `VAULT` (`GIT_ROOT/book`). A vault-relative path like `chapters/x.md` must become `book/chapters/x.md` before being passed to git, or commits silently no-op.
 
-6. **Token storage is not yet real secure storage.** `getStoredToken()`/`setStoredToken()` in `client.js` wrap `capacitor-secure-storage-plugin`, with a plaintext fallback when the plugin isn't wired up. Confirm `npx cap sync android` runs after `npm install` in CI before relying on it.
+6. **Token storage.** `getStoredToken()`/`setStoredToken()` in `client.js` are the single integration point across all three shells: on mobile they wrap `capacitor-secure-storage-plugin` (plaintext fallback if the plugin isn't wired up — confirm `npx cap sync android` runs after `npm install` in CI); on Electron desktop they call through `window.manuscriptDesktop.{get,set}StoredToken`, a contextBridge/IPC pair (`electron/preload.js` + `electron/main.js`) backed by `safeStorage`, which itself wraps the OS keyring (falls back to `localStorage` if no keyring backend is present, e.g. `libsecret` missing); on the plain browser (laptop, no Electron/Capacitor) it's `localStorage`, unencrypted, since a browser tab has no keyring to call into. `tokenStorageDescription()` in `client.js` reflects whichever of these is actually active back to the Settings UI — don't let that copy drift from what's really happening.
 
 7. **Progress-save is chapter-switch- and lifecycle-aware, not just scroll-based.** `/api/progress` saves on chapter switch and on `visibilitychange` → `hidden` (via `fetch(..., { keepalive: true })`), not only from a debounced scroll listener — otherwise switching chapters without scrolling, or closing the app right after opening one, would save nothing.
 
@@ -247,6 +254,8 @@ Read, in this order:
 6. `AppCode/editor-src/*.js` — the CodeMirror 6 editor `client.js` mounts; read this before changing anything related to editing, note markers, or margin-chip layout.
 
 Before adding any new route or feature: check whether it already exists in `server.js` first. The Electron shell needs no porting (it runs `server.js` directly) — only the mobile Service Worker needs a matching port, following the same LightningFS/isomorphic-git patterns already established there. If a feature is genuinely laptop/desktop-only (filesystem browsing, PDF export via Puppeteer/Typst), don't port it to mobile — stub it with a clear error message instead, as done for `/api/export/pdf`.
+
+**If you touch anything under `AppCode/editor-src/`, do not treat `AppCode/public/mn-editor.bundle.js` (or its `.map`) as a deliverable file** — it's a compiled build artifact regenerated by `npm run build:editor`, and every packaging pipeline (Electron, Capacitor, or a manual `node server.js` run) rebuilds it on its own. Ship the `editor-src/*.js` source diff only; see "The frontend editor (CodeMirror 6)" above for the full reasoning.
 
 Before shipping any change to `mobile-sw.js` or its build pipeline, check the gotchas list above first — most bugs hit during this project's history were re-discoveries of the same handful of root causes (Buffer polyfill, CORS-in-a-Service-Worker, URL-encoded paths, git path prefixing).
 

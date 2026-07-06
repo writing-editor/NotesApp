@@ -16,4 +16,13 @@ contextBridge.exposeInMainWorld('manuscriptDesktop', {
   winMinimize: () => ipcRenderer.invoke('win-minimize'),
   winMaximizeToggle: () => ipcRenderer.invoke('win-maximize-toggle'),
   winClose: () => ipcRenderer.invoke('win-close'),
+  // Git PAT, encrypted at rest via the OS keyring (see electron/main.js).
+  // getStoredToken() resolves to a string ('' if none saved yet).
+  // setStoredToken(token) resolves to { ok, reason? } — reason is
+  // 'unavailable' when the OS has no keyring backend (e.g. libsecret
+  // missing), so the renderer can fall back to localStorage honestly
+  // instead of pretending the token was encrypted when it wasn't.
+  getStoredToken: () => ipcRenderer.invoke('get-stored-token'),
+  setStoredToken: (token) => ipcRenderer.invoke('set-stored-token', token),
+  isTokenEncryptionAvailable: () => ipcRenderer.invoke('token-encryption-available'),
 });

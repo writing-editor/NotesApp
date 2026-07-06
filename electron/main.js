@@ -16,7 +16,7 @@
 // of the mobile app's LightningFS / service-worker / git-in-the-browser
 // machinery is needed here.
 
-const { app, BrowserWindow, Menu, dialog, shell, ipcMain, globalShortcut } = require('electron');
+const { app, BrowserWindow, Menu, dialog, shell, ipcMain, globalShortcut, safeStorage } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const http = require('http');
@@ -72,6 +72,60 @@ function resolveInitialVault() {
   const cfg = readConfig();
   if (cfg.vault && fs.existsSync(cfg.vault)) return cfg.vault;
   return DEFAULT_VAULT_DIR;
+}
+
+// ── Encrypted PAT storage (desktop) ─────────────────────────────────────
+// Previously the git PAT lived in the renderer's localStorage, in plain
+// text, forever, on disk. That's fine for "don't ask me to retype it every
+// launch" but bad for "don't leave it lying around in cleartext". Electron's
+// safeStorage wraps the OS's own credential store (libsecret/kwallet on
+// Linux, Keychain on macOS, DPAPI on Windows) — so we get real encryption
+// at rest *and* persistence across restarts, without the app managing any
+// keys itself. The encrypted blob is written to a small file in userData;
+// only this main process (not the renderer) ever touches safeStorage.
+const TOKEN_PATH = path.join(app.getPath('userData'), 'git-pat.enc');
+
+function isEncryptionAvailable() {
+  try {
+    return safeStorage.isEncryptionAvailable();
+  } catch {
+    return false;
+  }
+}
+
+function readStoredToken() {
+  try {
+    if (!isEncryptionAvailable()) return '';
+    const encrypted = fs.readFileSync(TOKEN_PATH);
+    return safeStorage.decryptString(encrypted);
+  } catch {
+    return ''; // no token saved yet, or OS keyring unavailable/locked
+  }
+}
+
+function writeStoredToken(token) {
+  try {
+    if (!token) {
+      // Clearing the field should clear the saved token too, not leave a
+      // stale encrypted value that silently reappears on next launch.
+      if (fs.existsSync(TOKEN_PATH)) fs.unlinkSync(TOKEN_PATH);
+      return { ok: true };
+    }
+    if (!isEncryptionAvailable()) {
+      // No OS keyring backend found (e.g. libsecret missing on a minimal
+      // Linux install). Rather than silently falling back to plaintext —
+      // which would quietly defeat the point of this — tell the caller so
+      // the UI can fall back to localStorage and say so honestly.
+      return { ok: false, reason: 'unavailable' };
+    }
+    const encrypted = safeStorage.encryptString(token);
+    fs.mkdirSync(path.dirname(TOKEN_PATH), { recursive: true });
+    fs.writeFileSync(TOKEN_PATH, encrypted);
+    return { ok: true };
+  } catch (e) {
+    console.error('[desktop] failed to store token:', e.message);
+    return { ok: false, reason: 'error' };
+  }
 }
 
 // ── Server process management ───────────────────────────────────────────
@@ -403,6 +457,13 @@ async function persistCurrentVaultFromServer() {
 
 ipcMain.handle('open-vault-dialog', openVaultDialog);
 ipcMain.handle('notify-vault-changed', (_event, vaultPath) => persistVaultPath(vaultPath));
+
+// PAT storage — see "Encrypted PAT storage" above. The renderer never sees
+// the OS keyring directly; it just calls these two and gets back a token
+// string or a { ok, reason } result, same shape whether it's Linux/Mac/Win.
+ipcMain.handle('get-stored-token', () => readStoredToken());
+ipcMain.handle('set-stored-token', (_event, token) => writeStoredToken(token));
+ipcMain.handle('token-encryption-available', () => isEncryptionAvailable());
 
 ipcMain.handle('win-minimize', () => mainWindow?.minimize());
 ipcMain.handle('win-maximize-toggle', () => {

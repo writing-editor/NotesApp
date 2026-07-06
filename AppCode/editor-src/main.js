@@ -88,6 +88,7 @@ export function createLiveEditor({
           autocapitalize: 'sentences',
           autocorrect: 'on',
           spellcheck: 'true',
+          lang: 'en-GB',
         }),
       ],
     }),
