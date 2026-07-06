@@ -1285,45 +1285,50 @@ loadManifest();
 
   const isNative = () => !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
 
-  // ── Secure token storage (frontend-only; never sent to the server for storage) ──
-  // On the phone, this should call the Capacitor secure-storage plugin
-  // (e.g. capacitor-secure-storage-plugin) — NOT @capacitor/preferences, which is
-  // not encrypted. That plugin call is added when the Capacitor project (Section 6)
-  // is wired up; these two functions are the single integration point so the rest
-  // of this file never has to know which storage backend is in play.
-  // ── Secure token storage (frontend-only; never sent to the server for storage) ──
+  // ── Token storage (frontend-only; never sent to the server for storage) ──
+  // isomorphic-git (used by every backend this frontend talks to — laptop,
+  // Electron, and mobile alike) authenticates purely over HTTPS via onAuth();
+  // it never touches the OS's git credential manager or SSH keys, no matter
+  // how the local `git` CLI is configured on that machine. So every platform
+  // needs *some* token, not just mobile — the old "laptop: rely on system git
+  // credentials" assumption below was wrong and caused 401s on Electron/laptop
+  // pushes and pulls. The two functions below are the single integration point
+  // so the rest of this file never has to know which storage backend is in play:
+  //   - native (Capacitor/mobile): capacitor-secure-storage-plugin, actually encrypted.
+  //   - everywhere else (laptop browser, Electron): localStorage. This is NOT
+  //     encrypted — it's plain-text on disk (browser profile / Electron's
+  //     userData). Good enough to avoid retyping a PAT every session, but the
+  //     token-field note in Settings must be honest about this; don't upgrade
+  //     that copy to imply real secure storage until it is one.
   async function getStoredToken() {
-    if (!isNative()) return ''; // laptop: rely on system git credentials
     try {
-      if (window.Capacitor?.Plugins?.SecureStoragePlugin) {
+      if (isNative() && window.Capacitor?.Plugins?.SecureStoragePlugin) {
         const { value } = await window.Capacitor.Plugins.SecureStoragePlugin.get({ key: 'git-pat' });
         return value || '';
       }
-    } catch { /* not set yet or plugin error */ }
+      return window.localStorage.getItem('git-pat') || '';
+    } catch { /* not set yet or plugin/storage error */ }
     return '';
   }
 
   async function setStoredToken(token) {
-    if (!isNative()) return;
     try {
-      if (window.Capacitor?.Plugins?.SecureStoragePlugin) {
+      if (isNative() && window.Capacitor?.Plugins?.SecureStoragePlugin) {
         await window.Capacitor.Plugins.SecureStoragePlugin.set({ key: 'git-pat', value: token });
+        return;
       }
+      window.localStorage.setItem('git-pat', token);
     } catch (e) {
-      console.error('[settings] failed to store token securely:', e.message);
+      console.error('[settings] failed to store token:', e.message);
     }
   }
 
   function openSettings() {
     overlay.classList.add('open');
-    // Token field / note only make sense in their respective contexts (Section 3.4).
-    if (isNative()) {
-      tokenSection.style.display = '';
-      tokenNote.style.display = 'none';
-    } else {
-      tokenSection.style.display = 'none';
-      tokenNote.style.display = '';
-    }
+    // The token field is needed on every platform now (see note above) —
+    // only the helper text under it changes based on storage strength.
+    tokenSection.style.display = '';
+    tokenNote.style.display = isNative() ? 'none' : '';
 
     fetch('/api/git/config').then(r => r.json()).then(cfg => {
       remoteUrlInput.value   = cfg.remoteUrl   || '';

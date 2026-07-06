@@ -15,7 +15,7 @@ Your writing lives in plain markdown files inside a folder called the **vault** 
 - **Lets you edit** any paragraph in place by clicking it.
 - **Lets you add margin notes** — a note is stored right in the text as `[mn: your note here]`, or typed as `[mn.todo: ...]` / `[mn.query: ...]` / `[mn.ref: ...]` for different note categories.
 - **Remembers your place** — reopening the app returns you to the last chapter and scroll position you were at.
-- **Syncs via git** — commits happen automatically as you edit; pushing and pulling to GitHub (or any git remote) is manual, on your command, from the Settings sheet.
+- **Syncs via git** — edits are staged as you go; everything pending is bundled into a single commit the moment you tap **Push**. Pulling from GitHub (or any git remote) is likewise manual, on your command, from the Settings sheet.
 - Works as:
   - A **laptop app** — a small local server, `server.js`, opened in your browser.
   - A **desktop app (Linux/Ubuntu)** — the same server, wrapped in a native window with Electron. No terminal required.
@@ -68,13 +68,18 @@ This build is a thin native wrapper: it starts the exact same `AppCode/server.js
 1. Install the APK (built automatically by GitHub Actions on every push — check the repo's Actions tab for the latest build artifact).
 2. On first launch, open Settings and paste your repository URL and a **GitHub Personal Access Token** (see below for exactly which permissions it needs).
 3. Tap **Clone**. This downloads your vault onto the phone, stored in the browser's local database (not a folder you can browse with a file manager — that's normal, see the developer section for why).
-4. Read, edit, add notes as normal. Every edit is committed locally, automatically. Nothing leaves your phone until you tap **Push**.
+4. Read, edit, add notes as normal. Each edit is staged locally as you make it; nothing is committed until you tap **Push**, at which point every pending change is bundled into a single commit. Nothing leaves your phone until you tap **Push**.
 
-**Token permissions needed:**
+**Token permissions needed (all platforms — laptop, desktop, and phone):**
+
+`isomorphic-git` talks to GitHub over HTTPS directly and never uses your system git/SSH credentials, no matter how the local `git` CLI is configured on that machine — so a Personal Access Token is required in Settings on every platform, including the laptop and Electron desktop app, not just the phone.
+
 - **Classic PAT:** the `repo` scope.
 - **Fine-grained PAT:** access to this specific repository, with **Contents: Read and write** permission.
 
 Without write access, cloning and reading will work, but **Push will fail with a 401 error.**
+
+On the laptop and desktop app, the token is stored in local storage, unencrypted. On the phone, it's stored in the device's secure storage instead.
 
 **Known current limitation:** conflict resolution (if you edit the same file on two devices before syncing) isn't handled gracefully yet — if you hit a conflict, resolve it from the laptop or desktop app for now.
 
@@ -144,7 +149,7 @@ They register on the same scope with similar-looking cache names. If the wrong o
 
 3. **File paths with spaces.** Filenames like `01-chapter one.md` arrive URL-encoded (`chapter%20one.md`); `LightningFS` needs the decoded string. Every route reading a `path` query param must call `decodeURIComponent()` on it first.
 
-4. **Auto-commit must never throw.** Every note/edit route wraps `autoCommit()` in `.catch()` and treats failure as non-fatal — editing must never hard-depend on git succeeding.
+4. **Git operations must never throw into a note/edit route.** Saving a paragraph or note only ever stages the change (`git add`); it never commits. If a git call in that path fails (e.g. no repo configured yet), it's caught and treated as non-fatal — editing must never hard-depend on git succeeding.
 
 5. **Path prefixing for git operations.** `isomorphic-git`'s `dir` is always `GIT_ROOT`, never `VAULT` (`GIT_ROOT/book`). A vault-relative path like `chapters/x.md` must become `book/chapters/x.md` before being passed to git, or commits silently no-op.
 
@@ -158,7 +163,7 @@ They register on the same scope with similar-looking cache names. If the wrong o
 |---|---|
 | `POST /api/git/clone` | ✅ implemented, verifies `book/` exists post-clone |
 | `GET /api/git/status` | ✅ implemented (ahead/behind via `git.log` diff) |
-| `POST /api/git/commit` | ✅ implemented |
+| `POST /api/git/commit` | ✅ implemented — bundles all pending staged changes into one commit |
 | `POST /api/git/pull` | ✅ implemented, classifies conflict/network/generic errors |
 | `POST /api/git/push` | ✅ implemented, commits outstanding changes first |
 | `GET/POST /api/git/config` | ✅ implemented, persisted to `git-config.json` in LightningFS (token deliberately excluded) |
@@ -169,9 +174,19 @@ They register on the same scope with similar-looking cache names. If the wrong o
 | `GET /api/export/pdf` | ❌ intentionally 501s — Puppeteer/Typst can't run in-browser; use the laptop or desktop app |
 | `GET /api/browse`, `/api/open-vault` | ❌ intentionally omitted — native filesystem browsing is meaningless inside a Service Worker sandbox |
 
-### Auto-commit vs. push — this is intentional, not a bug
+### Staging vs. committing vs. push — this is intentional, not a bug
 
-Every note/edit action creates an immediate local commit the moment it succeeds — cheap and durable. Pushing to the remote is always a separate, manual, user-triggered action. Do not "fix" this into auto-push.
+Every note/edit action only stages the change (`git add`) the moment it succeeds — cheap and durable, and it means a crash or a killed app loses nothing, since the working-tree change is already on disk (or in LightningFS). Nothing is committed at that point.
+
+A commit is only created in two places, both of which sweep up *everything* staged since the last commit into one commit, not one commit per file or per edit:
+- tapping **Commit** in Settings (`POST /api/git/commit` → `commitAll()`), if you want to checkpoint locally without pushing yet;
+- tapping **Push**, which calls `commitAll()` internally first (see `gitSync.push`) so nothing pending is left behind, then pushes.
+
+This is why `git log` on this repo should normally show one commit per push/manual-commit action, not one per keystroke or per note. `commitAll()` also deliberately excludes `_progress.json` (per-device scroll position, rewritten constantly) so it never forces a noise commit on its own.
+
+Pushing to the remote is always a separate, manual, user-triggered action. Do not "fix" this into auto-push.
+
+**Dead code note:** `autoCommit()`/`commitFile()` in both `server.js` and `mobile-sw.js` (and `gitSync.commitFile` in `lib/git-Sync.js`) implement a per-file immediate-commit path from an earlier design. They are no longer called by any route in either file. They're left in place for now rather than deleted outright — if you're touching git-sync code, don't assume they run.
 
 ### The markdown/note parser (`parseMd`)
 
@@ -223,3 +238,26 @@ Read, in this order:
 Before adding any new route or feature: check whether it already exists in `server.js` first. The Electron shell needs no porting (it runs `server.js` directly) — only the mobile Service Worker needs a matching port, following the same LightningFS/isomorphic-git patterns already established there. If a feature is genuinely laptop/desktop-only (filesystem browsing, PDF export via Puppeteer/Typst), don't port it to mobile — stub it with a clear error message instead, as done for `/api/export/pdf`.
 
 Before shipping any change to `mobile-sw.js` or its build pipeline, check the gotchas list above first — most bugs hit during this project's history were re-discoveries of the same handful of root causes (Buffer polyfill, CORS-in-a-Service-Worker, URL-encoded paths, git path prefixing).
+
+---
+
+## Appendix — known redundant/dead code (not yet cleaned up)
+
+Flagged during a full pass through the codebase, September 2026-era iteration. Left in place for now; listed here so nobody re-discovers these from scratch or assumes they're load-bearing.
+
+**Confirmed dead — zero live callers:**
+- `AppCode/lib/pdf.js` (whole file) — Puppeteer-based PDF export, superseded by `AppCode/lib/typst.js`. Its import in `server.js` is already commented out (`server.js:11`).
+- `puppeteer` dependency in `AppCode/package.json` — only consumer was `lib/pdf.js`. CI already has to special-case skip its Chromium download (`PUPPETEER_SKIP_DOWNLOAD` in `build-electron-linux.yml`).
+- `parseMdPrint()` in `AppCode/lib/parse.js` — only ever called from the dead `lib/pdf.js`.
+- `autoCommit()` / `commitFile()` in both `AppCode/server.js` and `AppCode/mobile-sw.js` — leftover from the pre-batch-commit design (see "Staging vs. committing vs. push" above). No route in either file calls them.
+- `commitFile()` in `AppCode/lib/git-Sync.js` — exported, but its only caller was the dead `autoCommit()` in `server.js`.
+- The commented-out `//const { generatePdf } = require('./lib/pdf');` on `server.js:11`.
+
+**Broken, not just redundant — likely an actual CI failure:**
+- The "Install embedded Node.js dependencies" step in `.github/workflows/build-android-apk.yml`, which `cd`s into `mobile/www/nodejs`. That directory is never created by `mobile/scripts/sync-server-files.js` under the current Service Worker/LightningFS mobile architecture — it's leftover from an earlier "embedded Node runtime on-device" design that was abandoned. Worth checking recent Android CI run logs to see whether this is silently failing the build.
+
+**Technically reachable but effectively unused — defensive fallback, safe to leave:**
+- The count-based fallback branch inside `deleteNote()` in both `server.js` and `mobile-sw.js` (used only when `charPos` is omitted from a delete request). The only frontend caller, `client.js`, always sends `charPos`, so this path only fires if a request is built by hand or by a future caller that skips it.
+
+**Cosmetic:**
+- `AppCode/package.json`'s `"description"` field still reads "Margin-note reading and annotation server for Obsidian manuscripts" — stale branding from before this became its own app, ManuScript, rather than an Obsidian companion tool.

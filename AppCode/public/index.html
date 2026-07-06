@@ -149,12 +149,10 @@
       <div class="settings-section" id="git-token-section">
         <label>Personal access token</label>
         <input type="password" id="git-token" placeholder="ghp_...">
-        <small>Stored encrypted on this device only. Never leaves localhost except when
-          pushing/pulling.</small>
       </div>
       <div class="settings-section" id="git-token-note" style="display:none;">
-        <small>This device relies on your system git credential manager. Configure a PAT
-          there if the remote requires one — Manuscript does not store a token on the laptop.</small>
+        <small>Stored in this browser's local storage, unencrypted. On mobile, tokens are
+          stored in the device's secure storage instead.</small>
       </div>
       <div class="settings-section settings-row">
         <div>

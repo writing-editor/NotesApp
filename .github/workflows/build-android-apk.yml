@@ -10,7 +10,50 @@ on:
       - '.github/workflows/build-android-apk.yml'
 
 jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      # Deletes every past manuscript-debug-apk artifact before this run
+      # builds and uploads a fresh one — so only the newest APK from this
+      # workflow ever sits in storage at a time. Runs on every trigger of
+      # this workflow (no schedule), and only ever touches its own artifact
+      # name, so it never deletes anything belonging to the Electron build.
+      # The new artifact this run is about to upload is left completely
+      # alone by everything here — its lifetime is governed by this repo's
+      # own retention setting (Settings → Actions → General → "Artifact and
+      # log retention"), not by this step.
+      - name: Delete previous manuscript-debug-apk artifacts
+        uses: actions/github-script@v7
+        with:
+          script: |
+            let page = 1;
+            let deleted = 0;
+            while (true) {
+              const { data } = await github.rest.actions.listArtifactsForRepo({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                name: 'manuscript-debug-apk',
+                per_page: 100,
+                page,
+              });
+              if (data.artifacts.length === 0) break;
+              for (const a of data.artifacts) {
+                await github.rest.actions.deleteArtifact({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  artifact_id: a.id,
+                });
+                deleted++;
+              }
+              page++;
+            }
+            console.log(`Deleted ${deleted} previous manuscript-debug-apk artifact(s).`);
+
   build:
+    needs: cleanup
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
