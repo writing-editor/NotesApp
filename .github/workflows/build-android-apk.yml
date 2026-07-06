@@ -93,7 +93,7 @@ jobs:
           java-version: '21'
 
       - name: Install Android SDK
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@v4
 
       - name: Ensure Capacitor Android project exists
         working-directory: mobile
@@ -181,7 +181,7 @@ jobs:
         run: ./gradlew assembleDebug
 
       - name: Upload APK artifact
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v6
         with:
           name: manuscript-debug-apk
           path: mobile/android/app/build/outputs/apk/debug/app-debug.apk
