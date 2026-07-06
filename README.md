@@ -61,6 +61,8 @@ your-repo/
 2. **AppImage:** `chmod +x ManuScript-*.AppImage && ./ManuScript-*.AppImage`. **deb:** `sudo dpkg -i manuscript-desktop_*.deb` and launch it from your applications menu.
 3. On first launch you'll see the same vault picker as the browser version — point it at your git repository once, and it's remembered.
 
+**Updating:** re-run the same install command with a newer build — `sudo dpkg -i` over an existing `.deb` install updates in place (no uninstall needed); for `.AppImage`, just replace the old file with the new one. Each CI build now stamps a distinct version (`1.0.<CI run number>`) so it's easy to tell builds apart.
+
 This build is a thin native wrapper: it starts the exact same `AppCode/server.js` in the background and opens a window pointed at it, so behavior matches the browser version exactly.
 
 ### Using it on your phone (Android)
@@ -69,6 +71,8 @@ This build is a thin native wrapper: it starts the exact same `AppCode/server.js
 2. On first launch, open Settings and paste your repository URL and a **GitHub Personal Access Token** (see below for exactly which permissions it needs).
 3. Tap **Clone**. This downloads your vault onto the phone, stored in the browser's local database (not a folder you can browse with a file manager — that's normal, see the developer section for why).
 4. Read, edit, add notes as normal. Each edit is staged locally as you make it; nothing is committed until you tap **Push**, at which point every pending change is bundled into a single commit. Nothing leaves your phone until you tap **Push**.
+
+**Updating:** install a newer APK over the old one directly — Android allows this without uninstalling first as long as CI is signing with a persistent release keystore (see the developer section); if the signing secrets haven't been set up yet, Android will reject the update install and you'll need to uninstall the old one first.
 
 **Token permissions needed (all platforms — laptop, desktop, and phone):**
 
@@ -221,6 +225,13 @@ AppCode/public/*.js,*.html,*.css  ──copy──▶  mobile/www/*
 
 `mobile/scripts/sync-server-files.js` does the mobile esbuild bundling/copy step and includes the build-time guard mentioned above — do not remove it.
 
+### Updating an installed build without uninstalling first
+
+Both platforms now stamp a distinct, always-increasing version on every CI build (`1.0.<GitHub Actions run number>`), instead of a hardcoded version that never changed:
+
+- **Linux (`.deb`/`AppImage`):** `sudo dpkg -i` a new `.deb` over an existing install already updates in place — this always worked, the version bump just makes builds distinguishable. `.AppImage` has no install step at all; "updating" means replacing the file.
+- **Android (APK):** requires two things to update-install without uninstalling — a higher `versionCode` (now set from the CI run number in `build-android-apk.yml`) AND the same signing key across builds. The signing key requires one-time setup: generate a keystore, base64-encode it, and add it plus its passwords as repo secrets (`ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`, `ANDROID_KEY_PASSWORD` — see the comment above the "Write release keystore" step in that workflow for exact commands). Until those secrets exist, the workflow silently falls back to Capacitor's default (non-persistent) debug signing, and installing a new build will require uninstalling the old one first, same as before.
+
 ### App identity
 
 - **App display name:** "ManuScript" — `mobile/capacitor.config.json` → `appName`, Android `res/values/strings.xml` → `app_name`, and `electron/package.json` → `build.productName`.
@@ -241,7 +252,22 @@ Before shipping any change to `mobile-sw.js` or its build pipeline, check the go
 
 ---
 
-## Appendix — known redundant/dead code (not yet cleaned up)
+## Future ideas (not committed to, not scheduled — maybe someday)
+
+### Real-folder access to the vault on mobile
+
+Right now, on mobile, the vault only exists inside LightningFS — a virtual filesystem backed by IndexedDB (see "Phone (Android/Capacitor)" above). There is no real folder a file manager, Obsidian, or a USB cable can see. If the network or GitHub is down, there's currently no way to get the vault off the phone except through git itself.
+
+The idea discussed: let the phone also mirror the vault to a real folder on-device, using `@capacitor/filesystem` and Android's Storage Access Framework, so a file manager (or another app like Obsidian) can read/write it directly — giving a manual, git-independent way to sync between devices (e.g. copy the folder over USB, or through a synced folder app) when network or git isn't available.
+
+Two ways this could go, discussed and deliberately **not** chosen yet because of the complexity tradeoff:
+
+- **Replace LightningFS with a real-filesystem adapter** so isomorphic-git operates directly on the SAF-exposed folder — one source of truth, no double-copy, but touches the single most fragile part of the mobile build (per the CORS/Buffer gotchas above) and SAF's `content://` URIs don't map cleanly onto the plain-path `fs` interface isomorphic-git expects. Higher risk.
+- **Keep LightningFS as-is, add a manual export/import mirror step** — a "sync to folder" / "sync from folder" action that just copies files, independent of git entirely. Lower risk, but on its own it has no way to know if the folder version and the LightningFS version have both changed since the last sync.
+
+The natural next question — should the app detect edits made directly in the mirrored folder (e.g. from Obsidian) rather than requiring a manual sync tap — was discussed and deliberately deferred: doing it safely means either (a) staying manual and accepting that editing both sides between syncs can silently overwrite one, or (b) adding real conflict detection, which quickly requires the same kind of conflict-resolution UI this app already punts on for git conflicts ("resolve on laptop"). Decided this is more complexity than it's worth for now — a plain manual mirror, no auto-detection, no merge logic, is the version worth building if this ever gets picked up.
+
+
 
 Flagged during a full pass through the codebase, September 2026-era iteration. Left in place for now; listed here so nobody re-discovers these from scratch or assumes they're load-bearing.
 
@@ -253,8 +279,11 @@ Flagged during a full pass through the codebase, September 2026-era iteration. L
 - `commitFile()` in `AppCode/lib/git-Sync.js` — exported, but its only caller was the dead `autoCommit()` in `server.js`.
 - The commented-out `//const { generatePdf } = require('./lib/pdf');` on `server.js:11`.
 
+**Fixed since first flagged:**
+- ~~The "Install embedded Node.js dependencies" step in `build-android-apk.yml`~~ — removed. It `cd`'d into `mobile/www/nodejs`, a directory `sync-server-files.js` never creates under the current Service Worker/LightningFS architecture; leftover from an abandoned earlier design. Gone now.
+
 **Broken, not just redundant — likely an actual CI failure:**
-- The "Install embedded Node.js dependencies" step in `.github/workflows/build-android-apk.yml`, which `cd`s into `mobile/www/nodejs`. That directory is never created by `mobile/scripts/sync-server-files.js` under the current Service Worker/LightningFS mobile architecture — it's leftover from an earlier "embedded Node runtime on-device" design that was abandoned. Worth checking recent Android CI run logs to see whether this is silently failing the build.
+(none currently known — see "Fixed since first flagged" above for the one that was here)
 
 **Technically reachable but effectively unused — defensive fallback, safe to leave:**
 - The count-based fallback branch inside `deleteNote()` in both `server.js` and `mobile-sw.js` (used only when `charPos` is omitted from a delete request). The only frontend caller, `client.js`, always sends `charPos`, so this path only fires if a request is built by hand or by a future caller that skips it.

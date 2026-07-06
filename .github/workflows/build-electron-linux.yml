@@ -99,6 +99,17 @@ jobs:
         working-directory: electron
         run: npm install
 
+      # dpkg happily reinstalls a .deb over an existing install without
+      # uninstalling first — that already works today. What was missing is
+      # a version bump: package.json's version was hardcoded at 1.0.0 on
+      # every build, so every .deb/.AppImage was version-identical, which
+      # made it look like nothing had changed even when it had. Tying the
+      # patch number to the CI run number gives every build a distinct,
+      # always-increasing version with no manual bumping required.
+      - name: Set package version from this run
+        working-directory: electron
+        run: npm version "1.0.${{ github.run_number }}" --no-git-tag-version --allow-same-version
+
       - name: Build Linux packages (.deb and AppImage)
         working-directory: electron
         run: npm run dist:linux

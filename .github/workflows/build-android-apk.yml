@@ -80,10 +80,6 @@ jobs:
         working-directory: mobile
         run: npm run sync-files
 
-      - name: Install embedded Node.js dependencies
-        working-directory: mobile/www/nodejs
-        run: npm install
-
       - uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
@@ -104,8 +100,77 @@ jobs:
       - name: Overlay custom app icons
         run: cp -r mobile/icon-assets/. mobile/android/app/src/main/res/
 
-      - name: Build debug APK
+      # Android only offers an in-place update (no uninstall required) when
+      # the new APK has a HIGHER versionCode than what's installed AND is
+      # signed with the SAME key. Without this step, every CI run left
+      # versionCode at Capacitor's scaffolded default (1), so nothing ever
+      # looked like an "update" to Android no matter how it was signed.
+      # github.run_number always increases build-over-build, so it's a simple
+      # reliable versionCode source — no manual bumping required.
+      - name: Set versionCode/versionName from this run
+        working-directory: mobile/android/app
+        run: |
+          sed -i "s/versionCode [0-9]\+/versionCode ${{ github.run_number }}/" build.gradle
+          sed -i "s/versionName \"[^\"]*\"/versionName \"1.0.${{ github.run_number }}\"/" build.gradle
+          grep -E "versionCode|versionName" build.gradle
+
+      # The other half of "installs as an update, not a fresh app": the APK
+      # must be signed with the SAME key every run. cap add android's
+      # scaffolded debug signing config points at whatever debug.keystore
+      # happens to exist on that runner, which is not persistent across CI
+      # runs — so every build was effectively signed with a different key,
+      # and Android refuses to update-install over a differently-signed app
+      # (silent failure, looks like it needs an uninstall first).
+      #
+      # One-time setup required before this step will work:
+      #   1. Generate a keystore once, locally:
+      #        keytool -genkeypair -v -keystore release.keystore -alias manuscript \
+      #          -keyalg RSA -keysize 2048 -validity 10000
+      #   2. Base64-encode it: base64 -w0 release.keystore > release.keystore.b64
+      #   3. Add these as repo secrets (Settings → Secrets and variables → Actions):
+      #        ANDROID_KEYSTORE_BASE64   — contents of release.keystore.b64
+      #        ANDROID_KEYSTORE_PASSWORD — the keystore password you set above
+      #        ANDROID_KEY_ALIAS         — "manuscript" (or whatever alias you used)
+      #        ANDROID_KEY_PASSWORD      — the key password you set above
+      # Without these secrets set, this step is skipped and the build falls
+      # back to Capacitor's default debug signing — meaning updates will
+      # keep requiring an uninstall until the secrets are added.
+      - name: Write release keystore
+        if: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' }}
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        working-directory: mobile/android/app
+        run: echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > release.keystore
+
+      - name: Configure release signing
+        if: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' }}
+        working-directory: mobile/android/app
+        run: |
+          cat >> build.gradle << 'EOF'
+
+          android {
+              signingConfigs {
+                  release {
+                      storeFile file("release.keystore")
+                      storePassword System.getenv("ANDROID_KEYSTORE_PASSWORD")
+                      keyAlias System.getenv("ANDROID_KEY_ALIAS")
+                      keyPassword System.getenv("ANDROID_KEY_PASSWORD")
+                  }
+              }
+              buildTypes {
+                  debug {
+                      signingConfig signingConfigs.release
+                  }
+              }
+          }
+          EOF
+
+      - name: Build APK
         working-directory: mobile/android
+        env:
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: ./gradlew assembleDebug
 
       - name: Upload APK artifact
