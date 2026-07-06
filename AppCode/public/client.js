@@ -1195,6 +1195,10 @@ vaultPickerConfirm.addEventListener('click', async () => {
       body: JSON.stringify({ path: _pickerChosenPath }),
     });
     if (res.ok) {
+      // Optional hook for the Electron desktop shell (see electron/preload.js)
+      // so it can remember this vault across restarts. No-op in the browser
+      // and on mobile, same pattern as the window.Capacitor checks above.
+      window.manuscriptDesktop?.notifyVaultChanged?.(_pickerChosenPath);
       closeVaultPicker();
       location.reload();
     } else {

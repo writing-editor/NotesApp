@@ -42,11 +42,16 @@ jobs:
       - name: Install electron-builder Linux packaging tools
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends rpm
 
-      - name: Ensure app icon exists
+      - name: Ensure app icon set exists
+        # icon.png and icons/*.png are committed to the repo (generated from
+        # mobile/store-assets/playstore-icon-512.png), so this only runs the
+        # generator if someone deletes them. A single flat PNG passed to
+        # electron-builder's linux.icon causes some launchers/app-grids to
+        # fall back to a generic icon, hence the full multi-size set.
         run: |
-          mkdir -p electron/build-resources
-          if [ ! -f electron/build-resources/icon.png ]; then
-            cp mobile/store-assets/playstore-icon-512.png electron/build-resources/icon.png
+          if [ ! -f electron/build-resources/icon.png ] || [ -z "$(ls -A electron/build-resources/icons 2>/dev/null)" ]; then
+            pip install --break-system-packages --quiet pillow
+            python3 electron/build-resources/generate-icons.py
           fi
 
       - name: Install Electron dependencies

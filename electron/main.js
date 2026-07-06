@@ -21,6 +21,12 @@ const path = require('path');
 const fs = require('fs');
 const http = require('http');
 const { fork } = require('child_process');
+// Electron reports this as the window's WM_CLASS on Linux. It must match
+// build.linux.executableName / build.linux.desktop.entry.StartupWMClass in
+// electron/package.json — otherwise a pinned dash launcher and the actually
+// running window are seen as two different apps, showing up as two separate
+// icons in the dock/dash instead of one. Set before app.whenReady().
+app.setName('manuscript');
 
 // ── Paths ────────────────────────────────────────────────────────────────
 // In development we run from the repo checkout: electron/ sits next to
@@ -371,7 +377,32 @@ async function openVaultDialog() {
   }
 }
 
+// The in-page vault picker (Settings inside the app itself) also changes the
+// vault, by POSTing straight to /api/vault — bypassing openVaultDialog above
+// entirely. That path is patched (see AppCode/public/client.js) to call this
+// via the preload bridge right after a successful change, so it gets
+// remembered too, not just vault changes made through Electron's own dialog.
+function persistVaultPath(vaultPath) {
+  if (!vaultPath) return;
+  writeConfig({ ...readConfig(), vault: vaultPath });
+}
+
+// Safety net: whatever the server's *actual current* vault is when the app
+// is about to quit gets saved too, in case some future vault-changing code
+// path forgets to call the notify hook above. Cheap and idempotent.
+async function persistCurrentVaultFromServer() {
+  if (!serverPort) return;
+  try {
+    const res = await fetch(`http://127.0.0.1:${serverPort}/api/vault`);
+    const { vault } = await res.json();
+    persistVaultPath(vault);
+  } catch {
+    // Server may already be shutting down — nothing to do.
+  }
+}
+
 ipcMain.handle('open-vault-dialog', openVaultDialog);
+ipcMain.handle('notify-vault-changed', (_event, vaultPath) => persistVaultPath(vaultPath));
 
 ipcMain.handle('win-minimize', () => mainWindow?.minimize());
 ipcMain.handle('win-maximize-toggle', () => {
@@ -401,9 +432,10 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
 });
 
-app.on('before-quit', () => {
-  if (serverProcess) serverProcess.kill();
+app.on('before-quit', async (event) => {
   globalShortcut.unregisterAll();
+  await persistCurrentVaultFromServer();
+  if (serverProcess) serverProcess.kill();
 });
 
 app.whenReady().then(async () => {
