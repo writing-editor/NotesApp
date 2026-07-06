@@ -82,39 +82,14 @@ ws.onmessage = async e => {
 };
 
 // ── Manifest & navigation ────────────────────────────────────────────────────
-async function loadManifest(isRetry = false) {
-  let data;
-  try {
-    const res = await fetch('/api/manifest');
-    if (!res.ok) {
-      // If server returns 400, it means no vault is set
-      if (res.status === 400) throw new Error('NO_VAULT');
-      throw new Error('HTTP ' + res.status);
-    }
-    try {
-      data = await res.json();
-    } catch {
-      // Not valid JSON — on mobile this happens when the fetch raced the
-      // Service Worker's own install/activate on a cold start (the request
-      // falls through to a plain HTML response before the SW is
-      // controlling the page, instead of being routed to the mobile
-      // backend). That's transient, so retry shortly before giving up.
-      if (!isRetry) { setTimeout(() => loadManifest(true), 400); return; }
-      throw new Error('NO_VAULT');
-    }
-  } catch (e) {
-    if (e.message === 'NO_VAULT') {
-      const onNative = !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
-      document.getElementById('page-wrap').innerHTML = onNative
-        ? `<div class="state-msg">No manuscript loaded yet.<br><small>Open <b>Settings</b> and clone a repository to start reading and editing.</small></div>`
-        : `<div class="state-msg">No vault selected.<br><small>Click the <b>Open Vault</b> button in the sidebar to set your book folder.</small></div>`;
-    } else {
-      document.getElementById('page-wrap').innerHTML =
-        `<div class="state-msg" style="color:#c0392b;">Could not load manifest: ${e.message}</div>`;
-    }
-    return;
-  }
-
+// Rebuilds the sidebar from the current manifest, and returns the flat list
+// of valid paths plus the fetched data — but does NOT navigate anywhere.
+// Factored out of loadManifest() below so callers that just need the sidebar
+// refreshed (e.g. after a git pull, mid-session) don't inherit
+// loadManifest()'s boot-time "jump to saved progress or the first chapter"
+// behavior, which would yank the person away from whatever they're currently
+// reading/editing.
+async function renderManifestSidebar(data) {
   document.getElementById('book-title').textContent = data.title;
   document.title = data.title;
 
@@ -165,8 +140,68 @@ async function loadManifest(isRetry = false) {
     });
   });
 
-  // Build flat list of all valid paths from this manifest
-  const allPaths = data.sections.flatMap(s => s.files.map(f => f.path));
+  return data.sections.flatMap(s => s.files.map(f => f.path));
+}
+
+// Re-fetches the manifest and rebuilds the sidebar in place, without
+// navigating away from whatever chapter is currently open. For use after an
+// action that can change which files exist (e.g. a git pull) but where the
+// person's current reading/editing position should be left alone — unlike
+// loadManifest(), which is boot-time-oriented and always jumps to the saved
+// progress or the first chapter.
+async function refreshManifestSidebar() {
+  try {
+    const res = await fetch('/api/manifest');
+    if (!res.ok) return;
+    const data = await res.json();
+    const allPaths = await renderManifestSidebar(data);
+    // If the chapter that's currently open no longer exists post-pull (e.g.
+    // it was renamed/deleted upstream), fall back to the same "no valid
+    // path" empty state loadManifest() shows, rather than leaving a dead
+    // editor open on a file that's gone.
+    if (currentPath && !allPaths.includes(currentPath) && allPaths.length) {
+      loadChapter(allPaths[0]);
+    } else if (!allPaths.length) {
+      document.getElementById('page-wrap').innerHTML =
+        `<div class="state-msg">No markdown files found in vault.<br><small>Add .md files to front/, chapters/, or back/ inside your book folder.</small></div>`;
+    }
+  } catch {}
+}
+
+async function loadManifest(isRetry = false) {
+  let data;
+  try {
+    const res = await fetch('/api/manifest');
+    if (!res.ok) {
+      // If server returns 400, it means no vault is set
+      if (res.status === 400) throw new Error('NO_VAULT');
+      throw new Error('HTTP ' + res.status);
+    }
+    try {
+      data = await res.json();
+    } catch {
+      // Not valid JSON — on mobile this happens when the fetch raced the
+      // Service Worker's own install/activate on a cold start (the request
+      // falls through to a plain HTML response before the SW is
+      // controlling the page, instead of being routed to the mobile
+      // backend). That's transient, so retry shortly before giving up.
+      if (!isRetry) { setTimeout(() => loadManifest(true), 400); return; }
+      throw new Error('NO_VAULT');
+    }
+  } catch (e) {
+    if (e.message === 'NO_VAULT') {
+      const onNative = !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
+      document.getElementById('page-wrap').innerHTML = onNative
+        ? `<div class="state-msg">No manuscript loaded yet.<br><small>Open <b>Settings</b> and clone a repository to start reading and editing.</small></div>`
+        : `<div class="state-msg">No vault selected.<br><small>Click the <b>Open Vault</b> button in the sidebar to set your book folder.</small></div>`;
+    } else {
+      document.getElementById('page-wrap').innerHTML =
+        `<div class="state-msg" style="color:#c0392b;">Could not load manifest: ${e.message}</div>`;
+    }
+    return;
+  }
+
+  const allPaths = await renderManifestSidebar(data);
 
   if (allPaths.length === 0) {
     document.getElementById('page-wrap').innerHTML =
@@ -276,7 +311,16 @@ function renderChapter(data, relPath) {
 // Used for WS file-change signals (e.g. another device/tab edited the same
 // file). Skipped while the user is actively typing here — their own edits
 // are the source of truth for the doc they're mid-editing.
-async function silentRefresh() {
+//
+// `force` bypasses the two skip guards below (identical-content and
+// pending-local-save). Those guards are correct for the WS case this
+// function was built for — a *maybe*-relevant signal that may race with our
+// own writes — but wrong for a just-completed git pull: a successful pull is
+// new ground truth for the file, not a maybe-stale ping, and the "pending
+// local save" guard exists to protect in-progress typing, not to swallow a
+// legitimate remote update the person just explicitly asked for by tapping
+// Pull. See doSync()'s pull branch below for the call site.
+async function silentRefresh({ force = false } = {}) {
   if (!editingPath || !liveEditor) return;
   const path = editingPath; // path the *currently mounted* editor owns
 
@@ -293,8 +337,8 @@ async function silentRefresh() {
 
     // Skip if content is identical to what's already loaded (prevents a
     // pointless re-render when we trigger a WS event from our own write).
-    if (data.raw === _lastRenderedRaw) return;
-    if (saveTimer) return; // a local edit is still pending — don't clobber it
+    if (!force && data.raw === _lastRenderedRaw) return;
+    if (!force && saveTimer) return; // a local edit is still pending — don't clobber it
 
     const main = document.getElementById('main');
     const savedScroll = main ? main.scrollTop : 0;
@@ -1476,7 +1520,27 @@ loadManifest();
       let resultMsg = null;
       if (data.ok) {
         resultMsg = kind === 'pull' ? 'Pulled successfully.' : 'Pushed successfully.';
-        if (kind === 'pull' && currentPath) silentRefresh();
+        if (kind === 'pull') {
+          // A pull can add/remove/rename/reorder files (front/chapters/back),
+          // so the sidebar itself needs rebuilding, not just the open
+          // chapter's text — this previously only called silentRefresh(),
+          // which never touches the manifest, so new/renamed chapters from
+          // a pulled commit didn't show up until the whole app was
+          // restarted (restart re-runs loadManifest() on boot, which is why
+          // that "fixed" it). refreshManifestSidebar() rebuilds the sidebar
+          // without loadManifest()'s boot-time "jump to saved progress or
+          // first chapter" behavior, so it won't yank the person away from
+          // whatever they're currently reading. Await it so the sidebar is
+          // in its final state before the status message below is shown.
+          await refreshManifestSidebar();
+          // force: true — a completed pull is new ground truth for the
+          // currently open file, not a maybe-stale WS ping. Without force,
+          // this could still silently no-op if a debounced local save
+          // happened to still be pending (saveTimer) or the fetched content
+          // happened to match _lastRenderedRaw, neither of which should be
+          // able to swallow a pull the person explicitly asked for.
+          if (currentPath) await silentRefresh({ force: true });
+        }
       } else if (data.reason === 'diverged') {
         resultMsg = 'Push rejected — pull/resolve on laptop.';
       } else if (data.reason === 'conflict') {
