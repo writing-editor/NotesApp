@@ -1324,6 +1324,7 @@ loadManifest();
   const pullBtn             = document.getElementById('git-pull-btn');
   const pushBtn             = document.getElementById('git-push-btn');
   const statusText          = document.getElementById('sync-status-text');
+  const initialStatusText   = statusText ? statusText.textContent : '';
   const exportPdfSettings  = document.getElementById('export-pdf-settings');
 
   if (!overlay) return; // markup not present — nothing to wire up
@@ -1450,6 +1451,74 @@ loadManifest();
     }
   }
 
+  const syncPendingBadge = document.getElementById('sync-pending-badge');
+
+  // ── Launch-time remote check ────────────────────────────────────────────
+  // On open, contact GitHub once (fetch-only, no merge — see checkRemote()
+  // in lib/git-sync.js) so "N to pull" is accurate from the moment the app
+  // opens, rather than only updating whenever someone happens to press Pull.
+  // This is what "check GitHub on launch" means here: it does NOT auto-pull
+  // — pulling still requires the person to press the Pull button, since an
+  // automatic pull could clobber whatever they're about to type. It only
+  // answers "is there something waiting", cheaply and safely.
+  //
+  // Offline handling: if the fetch fails (most commonly no network — the
+  // exact case this was asked to handle), fall back to whatever ahead/behind
+  // was last computed locally (checkRemote() itself never destroys that;
+  // status() re-reads the existing remote-tracking ref either way) and say
+  // so plainly rather than showing a scary error or a silently-wrong "0 to
+  // pull". Never blocks app startup — this runs after the vault/chapter is
+  // already loaded and rendered.
+  async function checkRemoteOnLaunch() {
+    let cfg;
+    try {
+      cfg = await fetch('/api/git/config').then(r => r.json());
+    } catch {
+      return; // no server reachable at all — nothing to check
+    }
+    const remoteUrl = cfg && cfg.remoteUrl;
+    if (!remoteUrl) return; // nothing configured yet — nothing to check
+
+    try {
+      const token = await getStoredToken();
+      const res = await fetch('/api/git/check-remote', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ remoteUrl, token }),
+      });
+      const data = await res.json();
+      if (data.error) return; // e.g. no vault selected yet — quietly skip
+
+      if (data.checked) {
+        if (data.behind > 0 && syncPendingBadge) syncPendingBadge.style.display = '';
+        // Only overwrite the status line if it's still showing its initial
+        // placeholder — a real action (manual pull/push, or an error from
+        // one) that happened to run first should win, not get clobbered by
+        // this background check finishing later.
+        if (statusText.textContent === initialStatusText) {
+          let msg = `${data.ahead} to push, ${data.behind} to pull`;
+          if (data.dirty && data.dirty.length) msg += ` — ${data.dirty.length} uncommitted change${data.dirty.length === 1 ? '' : 's'}`;
+          statusText.textContent = msg;
+        }
+      } else if (data.reason === 'network') {
+        // Offline: show the last-known-locally-cached counts (still
+        // meaningful — just possibly stale) with an honest caveat, instead
+        // of either a bare error or silently doing nothing.
+        if (statusText.textContent === initialStatusText) {
+          statusText.textContent = `Offline — showing last known status: ${data.ahead} to push, ${data.behind} to pull`;
+        }
+        if (data.behind > 0 && syncPendingBadge) syncPendingBadge.style.display = '';
+      }
+      // Any other failure reason (auth error, etc.): stay quiet on launch —
+      // the person will see the real error if/when they open Settings and
+      // press Pull themselves, same as today. A launch-time check shouldn't
+      // surface a scarier error than pressing the button would.
+    } catch {
+      // Network layer itself threw (e.g. fetch to our own /api failed) —
+      // nothing useful to show; stay silent rather than guess.
+    }
+  }
+
   saveConfigBtn && saveConfigBtn.addEventListener('click', async () => {
     saveConfigBtn.disabled = true;
     try {
@@ -1540,6 +1609,7 @@ loadManifest();
           // happened to match _lastRenderedRaw, neither of which should be
           // able to swallow a pull the person explicitly asked for.
           if (currentPath) await silentRefresh({ force: true });
+          if (syncPendingBadge) syncPendingBadge.style.display = 'none';
         }
       } else if (data.reason === 'diverged') {
         resultMsg = 'Push rejected — pull/resolve on laptop.';
@@ -1592,20 +1662,52 @@ loadManifest();
 
   // ── "Open app → try sync" (Section 1.5 / 5.2) ────────────────────────────────
   // Silent pull on load if running inside Capacitor and a vault is already
-  // configured. Errors are swallowed — this must never block the initial render.
+  // configured. This actually pulls (merges), not just checks — mobile is the
+  // one platform where that's been judged safe to do automatically, since a
+  // phone is rarely mid-edit the instant the app opens. Errors used to be
+  // swallowed entirely, including network errors — meaning "no network" was
+  // handled by doing nothing and saying nothing, which isn't the same as
+  // handling it. Now a network failure specifically gets a visible, calm
+  // status line instead of silence; other errors (auth, conflict) still
+  // surface naturally the next time the person opens Settings, same as before.
   async function attemptSilentPullIfConfigured() {
     if (!isNative()) return;
     try {
       const cfg = await fetch('/api/git/config').then(r => r.json());
       if (cfg.remoteUrl) {
         remoteUrlInput && (remoteUrlInput.value = cfg.remoteUrl);
-        await doSync('pull', { silent: true });
+        const token = await getStoredToken();
+        const res = await fetch('/api/git/pull', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ remoteUrl: cfg.remoteUrl, token }),
+        });
+        const data = await res.json();
+        if (data.ok) {
+          if (currentPath) await silentRefresh({ force: true });
+          if (syncPendingBadge) syncPendingBadge.style.display = 'none';
+          await refreshStatus();
+        } else if (data.reason === 'network' && statusText.textContent === initialStatusText) {
+          statusText.textContent = 'Offline — couldn\u2019t check for updates.';
+        }
+        // Other failure reasons (auth/conflict/etc.) stay quiet here, same
+        // as before — they'll surface normally if the person opens Settings.
       }
-    } catch { /* swallow — offline is a normal state */ }
+    } catch { /* our own /api unreachable — offline is a normal state */ }
   }
   attemptSilentPullIfConfigured();
 
-  // Also attempt a silent pull on resume-from-background (Section 5.2).
+  // ── Launch-time remote check (laptop / Electron desktop) ────────────────
+  // Mobile already does a real silent pull above; a second check-only call
+  // here would just be a redundant network round-trip against the same
+  // remote. Everywhere else, nothing has checked GitHub yet at this point —
+  // this is what makes "N to pull" accurate the moment the app opens rather
+  // than only after someone presses Pull once. See checkRemoteOnLaunch()
+  // above for exactly what this does and does not do (check-only, no merge;
+  // offline-safe).
+  if (!isNative()) checkRemoteOnLaunch();
+
+  // Also attempt a silent pull on resume-from-background (Section 5.2, mobile only).
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible') {
       attemptSilentPullIfConfigured();

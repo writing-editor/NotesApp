@@ -224,6 +224,29 @@ app.get('/api/git/status', async (req, res) => {
   }
 });
 
+// Contacts the remote (fetch only, no merge) then returns fresh ahead/behind
+// counts — used on app launch to answer "is there a pull pending" without
+// relying on stale locally-cached remote-tracking refs. Body: { remoteUrl, token }.
+// If the fetch itself fails (most commonly no network), still returns the
+// last-known-locally-cached status rather than nothing, with `checked: false`
+// and a `reason` so the frontend can show "offline — showing last known
+// status" instead of a bare error.
+app.post('/api/git/check-remote', async (req, res) => {
+  if (!GIT_ROOT) return res.status(400).json({ error: 'No vault selected' });
+  const { remoteUrl, token } = req.body;
+  if (!remoteUrl) return res.status(400).json({ error: 'remoteUrl required' });
+  try {
+    const fetchResult = await gitSync.checkRemote({ dir: GIT_ROOT, remoteUrl, token });
+    const status = await gitSync.status({ dir: GIT_ROOT });
+    if (!fetchResult.ok) {
+      return res.json({ ...status, checked: false, reason: fetchResult.reason, message: fetchResult.message });
+    }
+    res.json({ ...status, checked: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // First-time setup on phone: clone the remote into VAULT's parent, then setVault()
 // to it. Body: { remoteUrl, token }
 app.post('/api/git/clone', async (req, res) => {

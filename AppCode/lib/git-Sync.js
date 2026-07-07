@@ -125,6 +125,41 @@ async function clone({ dir, remoteUrl, token }) {
   return { ok: true };
 }
 
+// Contacts the remote and updates the local remote-tracking ref
+// (refs/remotes/origin/<branch>) WITHOUT merging or touching the working
+// tree — i.e. `git fetch`, not `git pull`. This exists because status()
+// above only ever compares against whatever refs/remotes/origin/<branch>
+// already has cached locally; it never itself talks to the network. Without
+// a fetch first, "ahead/behind" is only as fresh as the last time something
+// (a manual pull, or this) actually reached GitHub — which is exactly why
+// the app used to show a pull as no-op-necessary right after launch even
+// when the remote had moved on. Call this, then status(), to get a genuinely
+// current answer. Safe to call as often as you like: it never merges,
+// commits, or writes to any tracked file, so it can't create the conflict/
+// diverged states that pull()/push() have to handle.
+async function checkRemote({ dir, remoteUrl, token }) {
+  if (!isGitRepo(dir)) {
+    return { ok: false, reason: 'error', message: 'not a git repository' };
+  }
+  try {
+    const branch = await git.currentBranch({ fs, dir, fullname: false });
+    await git.fetch({
+      fs, http, dir,
+      url: remoteUrl,
+      onAuth: authCallback(token),
+      singleBranch: true,
+      ref: branch || undefined,
+      tags: false,
+    });
+    return { ok: true };
+  } catch (e) {
+    if (/network|fetch|ENOTFOUND|ECONNREFUSED|EAI_AGAIN|timeout/i.test(e.message || '')) {
+      return { ok: false, reason: 'network', message: e.message };
+    }
+    return { ok: false, reason: 'error', message: e.message };
+  }
+}
+
 // Pull from remote. Does NOT attempt automatic conflict resolution — if isomorphic-git
 // reports conflicts, report them back untouched (Section 4.2).
 async function pull({ dir, remoteUrl, token, authorName, authorEmail }) {
@@ -183,4 +218,4 @@ async function push({ dir, remoteUrl, token, authorName, authorEmail, commitMess
   }
 }
 
-module.exports = { pull, push, commitAll, commitFile, status, clone, isGitRepo, toRepoPath, BOOK_PREFIX };
+module.exports = { pull, push, commitAll, commitFile, status, checkRemote, clone, isGitRepo, toRepoPath, BOOK_PREFIX };
