@@ -25,4 +25,15 @@ contextBridge.exposeInMainWorld('manuscriptDesktop', {
   getStoredToken: () => ipcRenderer.invoke('get-stored-token'),
   setStoredToken: (token) => ipcRenderer.invoke('set-stored-token', token),
   isTokenEncryptionAvailable: () => ipcRenderer.invoke('token-encryption-available'),
+  // AI provider API keys, encrypted at rest via the OS keyring (see
+  // electron/ai-keystore.js) — one file for all providers, keyed inside.
+  // getAiKey(provider) resolves to a string ('' if none saved yet).
+  // setAiKey(provider, key) resolves to { ok, reason? } — reason is
+  // 'unavailable' when the OS has no keyring backend, same convention as
+  // setStoredToken above, so the renderer can fall back to localStorage
+  // honestly. Ollama has no key (just a base URL, stored as plain non-secret
+  // config elsewhere) so it never calls these.
+  getAiKey: (provider) => ipcRenderer.invoke('ai-get-key', provider),
+  setAiKey: (provider, key) => ipcRenderer.invoke('ai-set-key', provider, key),
+  isAiKeyEncryptionAvailable: () => ipcRenderer.invoke('ai-key-encryption-available'),
 });

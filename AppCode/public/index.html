@@ -8,6 +8,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=EB+Garamond:ital,wght@0,400;0,500;0,600;1,400;1,500&family=Crimson+Pro:ital,wght@0,300;0,400;1,300;1,400&family=JetBrains+Mono:wght@300;400&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/styles.css">
+  <link rel="stylesheet" href="/ai-panel.css">
 </head>
 <body>
 
@@ -29,10 +30,17 @@
         <svg viewBox="0 0 24 24"><path d="M10 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z"/></svg>
         <span>Vault</span>
       </div>
-      <div class="sidebar-footer" id="settings-action" style="flex:1; justify-content:center; position:relative;">
+      <div class="sidebar-footer" id="settings-action" style="flex:1; border-right: 1px solid var(--rule); justify-content:center; position:relative;">
         <svg viewBox="0 0 24 24"><path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58a.5.5 0 0 0 .12-.64l-1.92-3.32a.5.5 0 0 0-.6-.22l-2.39.96a7.03 7.03 0 0 0-1.62-.94l-.36-2.54A.5.5 0 0 0 14 2h-3.84a.5.5 0 0 0-.5.42l-.36 2.54c-.59.24-1.13.56-1.62.94l-2.39-.96a.5.5 0 0 0-.6.22L2.77 8.48a.5.5 0 0 0 .12.64l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58a.5.5 0 0 0-.12.64l1.92 3.32c.14.24.42.34.68.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.28.27.42.5.42H14c.24 0 .46-.18.5-.42l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.24.09.51 0 .68-.22l1.92-3.32a.5.5 0 0 0-.12-.64l-2.21-1.6zM12 15.5A3.5 3.5 0 1 1 12 8.5a3.5 3.5 0 0 1 0 7z"/></svg>
         <span>Sync</span>
         <span id="sync-pending-badge" title="Changes pending on the remote" style="display:none; position:absolute; top:6px; right:calc(50% - 26px); width:8px; height:8px; border-radius:50%; background:#c0392b;"></span>
+      </div>
+      <!-- AI agent settings (connection + behaviour). Desktop-only: ai-src/main.js
+           only wires this button up when window.manuscriptDesktop.isElectron is
+           true; on mobile/plain-browser it's inert markup with no listener. -->
+      <div class="sidebar-footer" id="agent-action" style="flex:1; justify-content:center;">
+        <svg viewBox="0 0 24 24"><path d="M12 2a1 1 0 0 1 1 1v1.06A7.5 7.5 0 0 1 19.94 11H21a1 1 0 1 1 0 2h-1.06A7.5 7.5 0 0 1 13 19.94V21a1 1 0 1 1-2 0v-1.06A7.5 7.5 0 0 1 4.06 13H3a1 1 0 1 1 0-2h1.06A7.5 7.5 0 0 1 11 4.06V3a1 1 0 0 1 1-1zm0 4.5A5.5 5.5 0 1 0 12 17.5 5.5 5.5 0 0 0 12 6.5zm0 2.5a3 3 0 1 1 0 6 3 3 0 0 1 0-6z"/></svg>
+        <span>Agent</span>
       </div>
     </div>
   </nav>
@@ -191,6 +199,7 @@
 <input type="range" id="font-size-slider" min="18" max="30" value="17" step="1">
 
 <script src="/mn-editor.bundle.js"></script>
+<script src="/mn-ai.bundle.js"></script>
 <script src="/client.js"></script>
 <script>
   // Register service worker for offline support

@@ -74,6 +74,10 @@ jobs:
         working-directory: AppCode
         run: npm run build:editor
 
+      - name: Build AI bundle (agent-authored note splicing)
+        working-directory: AppCode
+        run: npm run build:ai
+
       - name: Install AppCode production dependencies (bundled into the app)
         working-directory: AppCode
         env:
@@ -123,5 +127,5 @@ jobs:
         with:
           name: manuscript-linux
           path: |
-            electron/dist/*.deb
-      # electron/dist/*.AppImage
+            electron/dist/*.AppImage
+#            electron/dist/*.deb

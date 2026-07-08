@@ -12,7 +12,7 @@
       --accent-h1:   #030944;
       --accent-dim:  #9e4a35;
       --note-bg:     #f6f4f0;
-      --sidebar-w:   260px;
+      --sidebar-w:   300px;
       --font-body:   'EB Garamond', Georgia, serif;
       --font-note:   'Crimson Pro', Georgia, serif;
       --font-ui:     'JetBrains Mono', monospace;
@@ -651,11 +651,16 @@
     .mn-type-query .mn-marker { color: #4a7a9b; }
     .mn-type-ref   .mn-marker { color: #6a8a3a; }
     .mn-type-todo  .mn-marker { color: #c47a20; }
+    /* Agent-authored note (see CONTEXT.md) — deliberately its own hue,
+       distinct from the three human-chosen types, so an AI-written note
+       reads as visually "other" at a glance rather than blending in. */
+    .mn-type-ai    .mn-marker { color: #7a4a9b; }
 
     /* Chip number */
     .mn-chip[data-note-type="query"] .mn-chip-num { color: #4a7a9b; }
     .mn-chip[data-note-type="ref"]   .mn-chip-num { color: #6a8a3a; }
     .mn-chip[data-note-type="todo"]  .mn-chip-num { color: #c47a20; }
+    .mn-chip[data-note-type="ai"]    .mn-chip-num { color: #7a4a9b; }
 
     /* Chip preview text — highlighter wash behind the two lines */
     .mn-chip[data-note-type="query"] .mn-chip-preview {
@@ -676,6 +681,12 @@
       padding: 0 2px;
       color: #7a4a10;
     }
+    .mn-chip[data-note-type="ai"] .mn-chip-preview {
+      background: linear-gradient(to bottom, rgba(122,74,155,0.14) 0%, rgba(122,74,155,0.09) 100%);
+      border-radius: 2px;
+      padding: 0 2px;
+      color: #5a3878;
+    }
 
     /* Popup type pill */
     .mn-popup-type {
@@ -694,6 +705,7 @@
     .mn-popup-type.type-query { background: rgba(74,122,155,0.12);  color: #2d5a78; }
     .mn-popup-type.type-ref   { background: rgba(106,138,58,0.12);  color: #3d5e1a; }
     .mn-popup-type.type-todo  { background: rgba(196,122,32,0.14);  color: #7a4a10; }
+    .mn-popup-type.type-ai    { background: rgba(122,74,155,0.13);  color: #5a3878; }
 
     /* Type selector in note-sheet */
     .note-type-row {

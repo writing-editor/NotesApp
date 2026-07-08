@@ -25,6 +25,11 @@ const NOTE_TYPE_CLASS = {
   query: 'mn-type-query',
   ref:   'mn-type-ref',
   todo:  'mn-type-todo',
+  // Agent-authored notes (see AppCode/CONTEXT.md). Written only by the AI
+  // agent's note-splice step (Stage 4), never by the manual note-type pill
+  // row — a human can retype one *away* from `ai` (query/ref/todo/none),
+  // but there's no UI path that assigns `ai` by hand.
+  ai:    'mn-type-ai',
 };
 
 // ── List block detector (avoids false positives on lines starting with digits) ─

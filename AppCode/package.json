@@ -5,7 +5,8 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js ../book",
-    "build:editor": "node editor-src/build.js"
+    "build:editor": "node editor-src/build.js",
+    "build:ai": "node ai-src/build.js"
   },
     "dependencies": {
     "@fontsource/dm-mono": "^5.2.7",

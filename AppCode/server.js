@@ -11,6 +11,7 @@ const { parseMd, countWords } = require('./lib/parse');
 //const { generatePdf } = require('./lib/pdf');
 const { generatePdf, isTypstAvailable } = require('./lib/typst');
 const gitSync = require('./lib/git-Sync');
+const aiProxy = require('./lib/ai-proxy');
 
 // ── Config & State ──────────────────────────────────────────────────────────
 let VAULT = process.argv[2] ? path.resolve(process.argv[2]) : null;
@@ -347,6 +348,38 @@ app.post('/api/git/config', (req, res) => {
     res.json({ ok: true });
   } catch (e) {
     res.status(500).json({ error: e.message });
+  }
+});
+
+// ── AI agent proxy (Stage 3 of the AI Agent plan) ───────────────────────────
+// Single inline route, plain function library — same shape as the git sync
+// routes above, NOT a mounted sub-router (see AppCode/CONTEXT.md §6 for the
+// correction this stage makes to an earlier plan revision's wording).
+//
+// Body: { provider, model, apiKey, ollamaUrl, systemPrompt, chapterText }
+// - apiKey is request-scoped only, exactly like the git PAT above: it is
+//   read from the body, used for this call, and never written to disk or
+//   logged server-side. Persistence of the key across runs is entirely a
+//   client-side concern (ai-src/storage.js's 3-tier keystore, Stage 2).
+// - chapterText is the full chapter markdown the client currently has open
+//   (or has selected via the scope control) — this route does not read
+//   VAULT itself, since the live-in-editor text may not be flushed to disk
+//   yet. Client is responsible for gathering scope; Stage 4's agentRunner.js
+//   is the caller.
+// - Returns { ok: true, placements: [{ charPos, content }, ...] } on success,
+//   or { ok: false, error } — including from an adapter-level throw, which
+//   ai-proxy.chat() already catches internally and turns into { ok: false }
+//   rather than rejecting, but this route still wraps in try/catch as a
+//   second line of defense, matching every other route's convention here.
+app.post('/api/ai/chat', async (req, res) => {
+  const { provider, model, apiKey, ollamaUrl, systemPrompt, chapterText } = req.body;
+  if (!provider) return res.status(400).json({ error: 'provider required' });
+  try {
+    const result = await aiProxy.chat({ provider, model, apiKey, ollamaUrl, systemPrompt, chapterText });
+    if (!result.ok) return res.status(502).json(result);
+    res.json(result);
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
   }
 });
 

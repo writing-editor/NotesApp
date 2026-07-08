@@ -1,0 +1,53 @@
+/* ai-panel.css — hand-authored, own <link> tag (not merged into styles.css,
+   per plan.md §3). Covers only what the reused .settings-* classes from
+   styles.css don't already style: <select>/<textarea> (that file only
+   styles <input>) and the small AI-only bits (run status, key note).
+   Colours/spacing intentionally match the existing .settings-section input
+   rule so a <select> or <textarea> here doesn't look like a foreign control
+   dropped into the Sync drawer's visual language. */
+
+#ai-settings-panel .settings-section select,
+#ai-settings-panel .settings-section textarea {
+  font-family: var(--font-ui);
+  font-size: 0.8rem;
+  padding: 0.5rem 0.6rem;
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+  background: var(--paper);
+  color: var(--ink);
+  resize: vertical;
+}
+
+#ai-settings-panel .settings-section select:focus,
+#ai-settings-panel .settings-section textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+#ai-settings-panel .settings-section textarea {
+  font-family: var(--font-ui);
+  line-height: 1.5;
+  min-height: 5.5rem;
+}
+
+/* Small helper/status text under a field or action row — reuses the same
+   faint-ink convention as #git-token-note-text (styles.css's generic
+   `.settings-section small` rule already covers colour/size; this just
+   trims the top margin so it sits snug under the control above it). */
+#ai-settings-panel .settings-section small {
+  margin-top: 0.1rem;
+}
+
+#ai-run-status {
+  border-top: 1px solid var(--rule);
+  padding-top: 0.8rem;
+}
+
+/* Stage 1: Save/Run are visibly inert (no storage or proxy wired up yet) —
+   a slightly lower opacity than the standard :disabled dimming so it reads
+   as "not built yet" rather than "temporarily unavailable". Remove once
+   Stage 2/3 wire these buttons to something real. */
+#ai-save-config:disabled,
+#ai-run-agent:disabled {
+  opacity: 0.35;
+}

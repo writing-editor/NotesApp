@@ -39,8 +39,9 @@ AppCode/node_modules
 AppCode/package-lock.json
 AppCode/public/mn-editor.bundle.js
 AppCode/public/mn-editor.bundle.js.map
+AppCode/public/mn-ai.bundle.js
+AppCode/public/mn-ai.bundle.js.map
 mobile/package-lock.json
-AppCode/public/mn-editor.bundle.js
 
 # --- 7. Electron desktop build ---
 electron/node_modules

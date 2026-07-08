@@ -21,6 +21,7 @@ const path = require('path');
 const fs = require('fs');
 const http = require('http');
 const { fork } = require('child_process');
+const aiKeystore = require('./ai-keystore');
 // Electron reports this as the window's WM_CLASS on Linux. It must match
 // build.linux.executableName / build.linux.desktop.entry.StartupWMClass in
 // electron/package.json — otherwise a pinned dash launcher and the actually
@@ -390,6 +391,30 @@ function createWindow() {
     `);
   });
 
+  // Hide the custom draggable title bar (and its rounded-corner margin)
+  // while fullscreen — there's no window chrome to drag/round in that
+  // state, and the extra ${TITLEBAR_H}px would just be dead space at the
+  // top of the screen. Reversed on exit. Done via executeJavaScript
+  // rather than insertCSS so it can be toggled (insertCSS keys are
+  // write-only from the main process).
+  const setFullscreenChrome = (isFull) => {
+    mainWindow.webContents.executeJavaScript(`
+      (function () {
+        var bar = document.querySelector('.__desktop-titlebar');
+        var appEl = document.querySelector('.app');
+        if (bar) bar.style.display = ${isFull} ? 'none' : '';
+        if (appEl) {
+          appEl.style.marginTop = ${isFull} ? '0px' : '';
+          appEl.style.height = ${isFull} ? '100vh' : '';
+          appEl.style.borderRadius = ${isFull} ? '0' : '';
+        }
+        document.documentElement.style.borderRadius = ${isFull} ? '0' : '';
+      })();
+    `).catch(() => {});
+  };
+  mainWindow.on('enter-full-screen', () => setFullscreenChrome(true));
+  mainWindow.on('leave-full-screen', () => setFullscreenChrome(false));
+
   // Open any target="_blank" / window.open() links (e.g. a git remote URL)
   // in the user's real browser instead of a second Electron window.
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
@@ -465,6 +490,12 @@ ipcMain.handle('get-stored-token', () => readStoredToken());
 ipcMain.handle('set-stored-token', (_event, token) => writeStoredToken(token));
 ipcMain.handle('token-encryption-available', () => isEncryptionAvailable());
 
+// AI provider API keys — see electron/ai-keystore.js. Provider-parameterized
+// so one pair of handlers covers claude/openai/gemini (Ollama has no key).
+ipcMain.handle('ai-get-key', (_event, provider) => aiKeystore.readKey(provider));
+ipcMain.handle('ai-set-key', (_event, provider, key) => aiKeystore.writeKey(provider, key));
+ipcMain.handle('ai-key-encryption-available', () => aiKeystore.isEncryptionAvailable());
+
 ipcMain.handle('win-minimize', () => mainWindow?.minimize());
 ipcMain.handle('win-maximize-toggle', () => {
   if (!mainWindow) return;
@@ -485,6 +516,14 @@ function buildMenu() {
   globalShortcut.register('CmdOrCtrl+O', openVaultDialog);
   globalShortcut.register('CmdOrCtrl+Shift+I', () => mainWindow?.webContents.toggleDevTools());
   globalShortcut.register('CmdOrCtrl+R', () => mainWindow?.webContents.reload());
+  // F11 toggles OS-level fullscreen (chrome-hiding, not just maximize).
+  // Registered globally rather than left to Chromium's default handling
+  // since there's no menu bar to fall back on if the accelerator ever
+  // gets swallowed by a focused webview.
+  globalShortcut.register('F11', () => {
+    if (!mainWindow) return;
+    mainWindow.setFullScreen(!mainWindow.isFullScreen());
+  });
 }
 
 // ── App lifecycle ────────────────────────────────────────────────────────

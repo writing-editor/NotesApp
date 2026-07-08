@@ -795,7 +795,7 @@ function openPopup(note, chip, anchor) {
   }
 
   // Type pill labels
-  const typeLabels = { query: 'Query', ref: 'Reference', todo: 'Todo' };
+  const typeLabels = { query: 'Query', ref: 'Reference', todo: 'Todo', ai: 'Agent' };
   const typePill = note.type
     ? `<div class="mn-popup-type type-${note.type}">${typeLabels[note.type] || note.type}</div>`
     : '';
@@ -1303,6 +1303,36 @@ async function exportPdf() {
 
 // ── Boot ─────────────────────────────────────────────────────────────────────
 loadManifest();
+
+// ── AI Agent panel (desktop-only) ───────────────────────────────────────────
+// Self-contained like the Settings/Sync block below — MnAI builds its own
+// settings-drawer DOM (mirroring #settings-overlay/#settings-panel) and
+// wires the sidebar's #agent-action button itself. No agent logic lives in
+// client.js; this is just the mount call, same relationship client.js has
+// with MnEditor. See AppCode/ai-src/main.js and AppCode/CONTEXT.md.
+if (window.manuscriptDesktop?.isElectron && window.MnAI) {
+  window.MnAI.mount({
+    triggerEl: document.getElementById('agent-action'),
+    // Stage 4: lets ai-src/agentRunner.js reach the live editor to insert
+    // notes into, without client.js needing to know anything about the
+    // agent feature itself. Called fresh on every run (not memoized by
+    // MnAI), since `liveEditor` is reassigned on every chapter open — see
+    // agentRunner.js's module comment for why that matters.
+    getEditor: () => liveEditor,
+  });
+}
+
+// Stage 4: the Agent settings panel inserts notes via the same
+// liveEditor.insertNoteAt() the manual "add note" flow uses, but
+// remountAfterNoteMutation() (needed to avoid the stale-superscript-number
+// bug — see that function's comment above) is private to this file. Rather
+// than exporting it onto window, ai-src/settingsPanel.js dispatches this
+// event once per completed run and client.js does the remount here — same
+// division of responsibility as MnAI owning its own DOM/network/status
+// logic while client.js remains the only thing that touches liveEditor.
+window.addEventListener('mn:notes-mutated', () => {
+  remountAfterNoteMutation();
+});
 
 // ── Settings / Git Sync drawer (mobile sync plan, Section 5.2) ──────────────
 // Self-contained block — deliberately not interleaved with the functions above.
