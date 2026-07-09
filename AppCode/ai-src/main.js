@@ -19,7 +19,7 @@ import { migrateLegacySystemPrompt } from './storage.js';
 function mount({ triggerEl, getEditor, getCurrentPath } = {}) {
   const panel = buildSettingsPanel({ triggerEl, getEditor, getCurrentPath });
   // Fire-and-forget: one-time upgrade of an old flat systemPrompt string
-  // into a vault-level agents/Custom.md file (plan.md §2). Runs here, once
+  // into a vault-level agents/Custom.md file. Runs here, once
   // per mount, rather than inside settingsPanel.open()'s hot path — it's
   // a no-op after the first successful run, and doesn't need to block the
   // panel from opening if it hasn't finished yet.

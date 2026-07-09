@@ -146,7 +146,7 @@ function buildManifest() {
 
 
 
-// ── Agent profiles (file-based, plan.md §2) ─────────────────────────────────
+// ── Agent profiles (file-based) ─────────────────────────────────────────────
 // Two tiers, merged, vault-wins: app-bundled defaults (read-only, ship next
 // to this file, never copied into a vault) and per-vault overrides in
 // <VAULT>/agents/ (git-synced with the manuscript, same as front/chapters/
@@ -200,7 +200,7 @@ app.get('/api/agents', (req, res) => {
 });
 
 // Fetch one agent's full file contents — this is what agentRunner.js reads
-// as the system prompt for a run (plan.md §2 "Execution change").
+// as the system prompt for a run.
 app.get('/api/agents/:key', (req, res) => {
   const agent = listAgents().find(a => a.key === req.params.key);
   if (!agent) return res.status(404).json({ error: 'Agent not found' });
@@ -212,8 +212,8 @@ app.get('/api/agents/:key', (req, res) => {
   }
 });
 
-// One-time migration helper (plan.md §2 "Note for whoever builds this
-// next"): a person's old free-text system prompt becomes the seed content
+// One-time migration helper: a person's old free-text system prompt becomes
+// the seed content
 // of a new vault-level agents/Custom.md file, so upgrading never silently
 // drops what they'd written. Idempotent-by-existence — if Custom.md is
 // already there (a previous migration, or the person's own file with that
@@ -464,7 +464,7 @@ app.post('/api/git/config', (req, res) => {
 //   throw, which ai-proxy.chat() already catches internally and turns into
 //   { ok: false } rather than rejecting, but this route still wraps in
 //   try/catch as a second line of defense, matching every other route's
-//   convention here. `rejected` (plan.md §3) is the count of placements
+//   convention here. `rejected` is the count of placements
 //   ai-proxy.chat() dropped for proposing a position inside an existing
 //   note's marker span — this route forwards it as-is, no extra handling
 //   needed here.

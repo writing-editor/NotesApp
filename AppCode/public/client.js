@@ -502,11 +502,18 @@ function mountLiveEditor(rawText, path) {
 // fully incremental and unaffected.
 function remountAfterNoteMutation() {
   if (!liveEditor || !editingPath) return;
-  const mainText = document.getElementById('main-text');
-  const scrollTop = mainText ? mainText.scrollTop : 0;
+  // The actual scrollable element is #main (see .main's `overflow-y: auto`
+  // in styles.css) — #main-text is just a non-scrolling child article, so
+  // reading/writing scrollTop on it was always a no-op. That's why saving a
+  // note reset the view to the top: mountLiveEditor() tears down and
+  // rebuilds the CM6 view (see the comment above), which drops the browser's
+  // native scroll position, and the old restore below never actually put it
+  // back because it was targeting the wrong element.
+  const main = document.getElementById('main');
+  const scrollTop = main ? main.scrollTop : 0;
   const text = liveEditor.getDoc();
   mountLiveEditor(text, editingPath);
-  if (mainText) mainText.scrollTop = scrollTop;
+  if (main) main.scrollTop = scrollTop;
 }
 
 // Flushes any pending debounced save immediately — used before navigating

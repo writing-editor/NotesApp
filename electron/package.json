@@ -8,7 +8,9 @@
   "homepage": "https://github.com/yourname/NotesApp",
   "scripts": {
     "start": "electron .",
-    "dist:linux": "electron-builder --linux deb AppImage"
+    "dist:linux": "electron-builder --linux deb AppImage",
+    "dist:win": "electron-builder --win nsis",
+    "dist:mac": "electron-builder --mac dmg zip"
   },
   "devDependencies": {
     "electron": "^31.0.0",
@@ -58,6 +60,20 @@
           "StartupWMClass": "manuscript"
         }
       }
+    },
+    "win": {
+      "target": [
+        { "target": "nsis", "arch": ["x64"] }
+      ],
+      "icon": "build-resources/icon.png"
+    },
+    "mac": {
+      "target": [
+        { "target": "dmg", "arch": ["x64", "arm64"] },
+        { "target": "zip", "arch": ["x64", "arm64"] }
+      ],
+      "category": "public.app-category.productivity",
+      "icon": "build-resources/icon.png"
     },
     "deb": {
       "depends": [

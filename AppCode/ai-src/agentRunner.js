@@ -34,7 +34,7 @@
 //                moment the user switches chapters after opening the Agent
 //                panel once.
 //
-// Scope (plan.md §1/§8): Stage 4 only implemented 'chapter'. Stage 5 adds
+// Scope: Stage 4 only implemented 'chapter'. Stage 5 adds
 // 'all' — every file across every manifest section, one /api/ai/chat call
 // per chapter (not one giant concatenated prompt — keeps each call's
 // chapterText/charPos pairing exactly as simple as the single-chapter case,
@@ -119,7 +119,7 @@ export async function runAgent({ getEditor, getCurrentPath, onAfterMutation, onS
 
   const config = getAgentConfig();
   const { provider, models, ollamaUrl, agentKey, mode, scope } = config;
-  // Per-provider model memory (plan.md §4) — resolve this run's model from
+  // Per-provider model memory — resolve this run's model from
   // the current provider's slot in the map, not a flat field.
   const model = models[provider] || '';
 
@@ -531,7 +531,7 @@ async function callAiChat({ provider, model, ollamaUrl, systemPrompt, apiKey, ch
   }
 
   // rejected: how many placements lib/ai-proxy.js's resolvePlacements()
-  // dropped for landing inside an existing note's marker span (plan.md §3's
+  // dropped for landing inside an existing note's marker span (the
   // pre-write check) — forwarded here so both scope functions above can fold
   // it into their run summaries.
   return { ok: true, placements: result.placements, rejected: result.rejected || 0 };
@@ -539,8 +539,7 @@ async function callAiChat({ provider, model, ollamaUrl, systemPrompt, apiKey, ch
 
 /**
  * Cancels the current in-flight run, if any. Safe to call when nothing is
- * running. Used by the settings panel's Cancel affordance (Stage 4 line in
- * plan.md: "Cancel-in-flight").
+ * running. Used by the settings panel's Cancel button (added in Stage 4).
  */
 export function cancelAgent() {
   if (inFlightController) {

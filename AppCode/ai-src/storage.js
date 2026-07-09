@@ -78,14 +78,14 @@ export async function keyStorageDescription() {
 
 // ── Non-secret agent config (Ollama URL, system prompt, scope, mode) ──────
 // Plain localStorage everywhere, same tier as the Ollama base URL was
-// always meant to be (plan.md §5: "not encrypted, not a secret"). No
+// always meant to be: not encrypted, not a secret. No
 // provider/platform branching needed.
 
 const CONFIG_KEY = 'ai-agent-config';
 
 const DEFAULT_CONFIG = {
   provider: 'claude',
-  // Per-provider model memory (plan.md §4) — replaces the old flat `model`
+  // Per-provider model memory — replaces the old flat `model`
   // field. Not a secret, so plain localStorage, same tier as everything
   // else in this blob; only the *key* goes through the 3-tier storage above.
   models: {
@@ -95,7 +95,7 @@ const DEFAULT_CONFIG = {
     ollama: '',
   },
   ollamaUrl: '',
-  // Agent profile (plan.md §2) — a reference to a file's `key` (see
+  // Agent profile — a reference to a file's `key` (see
   // server.js's /api/agents), not the prompt text itself. Replaces the old
   // flat `systemPrompt` string; empty means "nothing selected yet."
   agentKey: '',
@@ -104,7 +104,7 @@ const DEFAULT_CONFIG = {
 };
 
 // One-time normalization from the old flat `model` field to the new
-// per-provider `models` map (plan.md §4 "Migration for existing installs").
+// per-provider `models` map (migration for existing installs).
 // Runs every time getAgentConfig() loads a parsed blob still carrying the
 // old field; idempotent since the old field is deleted immediately after
 // seeding, so it only ever fires once per install.
@@ -119,8 +119,8 @@ function migrateFlatModel(parsed) {
   return { ...rest, models };
 }
 
-// One-time migration from the old flat `systemPrompt` string (plan.md §2
-// "Note for whoever builds this next") to a file-based agent reference.
+// One-time migration from the old flat `systemPrompt` string to a
+// file-based agent reference.
 // Unlike migrateFlatModel() above, this can't finish synchronously —
 // turning the old prompt into `models[provider]` was pure localStorage
 // surgery, but turning it into an agent reference means writing a real

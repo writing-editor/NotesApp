@@ -4,15 +4,14 @@
 // per CONTEXT.md §4/§6) and splices each one into the live CM6 document as
 // an `ai`-typed note, using the SAME insertion function the manual "add
 // note" flow already uses — client.js's `liveEditor.insertNoteAt(charPos,
-// content, 'ai')` — never a new write path, per plan.md §1/§2.
+// content, 'ai')` — never a new write path.
 //
 // This module does not know how to get an editor instance; it's handed one
 // (see agentRunner.js's `getEditor` option, threaded from client.js via
 // MnAI.mount({ getEditor })). It also does not talk to the network — that's
-// agentRunner.js's job. Kept as its own file/export because plan.md's
-// component tree (§3) lists it as a separate piece from agentRunner.js, and
-// because "apply placements to the doc" is a distinct, easily-unit-testable
-// responsibility from "fetch placements from the server."
+// agentRunner.js's job. Kept as its own file/export since "apply placements
+// to the doc" is a distinct, easily-unit-testable responsibility from
+// "fetch placements from the server."
 //
 // ── Ordering ─────────────────────────────────────────────────────────────
 // Placements are applied highest-charPos-first. Each insertNoteAt() splices
@@ -136,13 +135,13 @@ export function spliceIntoRawText(rawText, placements) {
   return { text, inserted };
 }
 
-// ── §3 post-write invariant check ──────────────────────────────────────────
+// ── Post-write invariant check ──────────────────────────────────────────────
 //
 // After a batch of placements has been spliced in (either write path above),
 // confirm the *only* change to the text is the insertion of well-formed
 // `[mn.ai: ...]` markers — nothing else moved, nothing else was deleted, no
-// pre-existing `[mn.*: ...]` marker (of any type) was altered. This is the
-// automated backstop plan.md §3 describes: the write path is safe by
+// pre-existing `[mn.*: ...]` marker (of any type) was altered. This is an
+// automated backstop: the write path is safe by
 // construction today (both splice functions only ever insert), but this turns
 // that from a currently-true fact about the code into a continuously
 // self-checking guarantee that would catch a future regression.

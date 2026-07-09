@@ -338,7 +338,7 @@ export function buildSettingsPanel({ triggerEl, getEditor, getCurrentPath } = {}
 
   providerSelect.addEventListener('change', async () => {
     applyProviderVisibility();
-    // Per-provider model memory (plan.md §4) — switching providers restores
+    // Per-provider model memory — switching providers restores
     // that provider's own last-used model, same as the key restore right
     // below it.
     const config = getAgentConfig();
@@ -385,7 +385,7 @@ export function buildSettingsPanel({ triggerEl, getEditor, getCurrentPath } = {}
     const config = getAgentConfig();
     setAgentConfig({
       provider,
-      // Per-provider model memory (plan.md §4) — write into this
+      // Per-provider model memory — write into this
       // provider's slot in the map, leaving every other provider's
       // remembered model untouched.
       models: { ...config.models, [provider]: modelInput.value },

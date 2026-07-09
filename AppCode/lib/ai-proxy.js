@@ -15,7 +15,7 @@
 //   3. Parse + validate the model's raw text response into placements of
 //      the shape { charPos, content }, resolving against chapterText so a
 //      bad/out-of-range offset from the model can't corrupt the document.
-//      Includes plan.md §3's pre-write invariant check: a placement whose
+//      Includes a pre-write invariant check: a placement whose
 //      charPos would land inside an existing `[mn.*: ...]` note's marker
 //      span is rejected outright (not clamped), since clamping there has no
 //      safe destination — see resolvePlacements()'s comment below.
