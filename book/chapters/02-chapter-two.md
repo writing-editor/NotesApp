@@ -23,7 +23,7 @@ carchesia. Caret semper, sine inpulsu, pallebant `rpcDriver` Tmolus
 [ictus](#concipiunt-iura-cedentem-naribus), quod ortus!
 
 Bacchantum primus, temptavit ulterius omnibus pertimuit suis successibus
-coniecit admissum adurat, per at inscius virgis. Placidi diversa[mn: test] quisque cum
+coniecit admissum adurat, per at inscius virgis. Plac[mn.ai: this is ai note] idi diversa[mn: test] quisque cum
 [vosne sanguine](#concipiunt-iura-cedentem-naribus) pars duroque, [et
 bacis](#concipiunt-iura-cedentem-naribus).
 

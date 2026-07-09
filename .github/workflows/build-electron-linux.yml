@@ -128,4 +128,4 @@ jobs:
           name: manuscript-linux
           path: |
             electron/dist/*.AppImage
-#            electron/dist/*.deb
+            electron/dist/*.deb

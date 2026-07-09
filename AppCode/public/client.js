@@ -9,6 +9,7 @@ let _progressTimer   = null;
 let _lastRenderedRaw = ''; // used to skip WS reloads that match what we already rendered
 let cachedTOCHeight  = 0;
 let tocTicking       = false;
+let tocRebuildTimer  = null; // debounces live TOC rebuilds while typing (see scheduleTOCRebuild)
 
 // ── Offline / Service Worker integration ─────────────────────────────────────
 // Shows a subtle banner when offline and triggers write-queue replay on reconnect.
@@ -250,6 +251,16 @@ async function loadChapter(relPath, updateNav = true) {
     document.getElementById('topbar-chapter').textContent = label;
   }
 
+  // Stage 5 (AI Agent scope refinement): lets the Agent settings panel's
+  // "Current chapter" scope label track what's actually open, without
+  // ai-src/ needing to know anything about nav markup or currentPath —
+  // it just listens for this event. Fired unconditionally (not only when
+  // updateNav is true) since the scope is "whatever chapter is loaded",
+  // independent of whether the sidebar nav highlight needed updating.
+  window.dispatchEvent(new CustomEvent('mn:chapter-changed', {
+    detail: { path: relPath, label: document.getElementById('topbar-chapter')?.textContent || relPath },
+  }));
+
   // Persist immediately on navigation — previously progress was only ever
   // saved from the scroll listener, so switching chapters without scrolling
   // (or closing the app right after opening a chapter) never recorded the
@@ -437,19 +448,33 @@ function scheduleSave(text) {
   }, 600);
 }
 
+// Debounces a scrollbar-TOC rebuild off the live doc text while the user is
+// typing. Bug fix: buildScrollbarTOC() was previously only called on chapter
+// load, silent WS refresh, and after a note mutation — never from onChange —
+// so adding/editing a heading did not update the popup until the chapter was
+// reopened. Rebuilding the TOC re-parses the whole doc and rewrites the popup's
+// innerHTML, which is cheap but not free, so this debounces on the same
+// keystroke cadence as scheduleSave() rather than rebuilding on every
+// keystroke.
+function scheduleTOCRebuild() {
+  clearTimeout(tocRebuildTimer);
+  tocRebuildTimer = setTimeout(() => buildScrollbarTOC(), 400);
+}
+
 function mountLiveEditor(rawText, path) {
   if (!window.MnEditor) { console.error('Editor bundle not loaded'); return; }
   const mainText = document.getElementById('main-text');
   if (!mainText) return;
 
   if (liveEditor) { liveEditor.destroy(); liveEditor = null; }
+  clearTimeout(tocRebuildTimer); // don't let a stale rebuild fire against the doc we're replacing
 
   editingPath = path;
 
   liveEditor = window.MnEditor.createLiveEditor({
     parent: mainText,
     doc: rawText,
-    onChange: (text) => scheduleSave(text),
+    onChange: (text) => { scheduleSave(text); scheduleTOCRebuild(); },
     onNotesChanged: (notes) => { currentNotes = notes; },
     onLayoutChanged: () => positionChips(),
     onSelectionForNote: ({ text, to, screenRect }) => showSelectionTooltip(text, to, screenRect),
@@ -1304,13 +1329,30 @@ async function exportPdf() {
 // ── Boot ─────────────────────────────────────────────────────────────────────
 loadManifest();
 
-// ── AI Agent panel (desktop-only) ───────────────────────────────────────────
+// ── AI Agent panel (desktop feature, also reachable under plain npm/browser
+// testing) ───────────────────────────────────────────────────────────────
 // Self-contained like the Settings/Sync block below — MnAI builds its own
 // settings-drawer DOM (mirroring #settings-overlay/#settings-panel) and
 // wires the sidebar's #agent-action button itself. No agent logic lives in
 // client.js; this is just the mount call, same relationship client.js has
 // with MnEditor. See AppCode/ai-src/main.js and AppCode/CONTEXT.md.
-if (window.manuscriptDesktop?.isElectron && window.MnAI) {
+//
+// This used to be gated on `window.manuscriptDesktop?.isElectron`, which
+// meant the button did nothing at all when running against the plain `npm
+// start` server (no isElectron, so MnAI never mounted and nothing was
+// listening on #agent-action — unlike Vault/Sync, which are wired
+// unconditionally a few lines up). The feature's actual Electron-only piece
+// is the encrypted key bridge, and that's already handled independently:
+// ai-src/storage.js falls back to plain localStorage whenever
+// window.manuscriptDesktop.getAiKey isn't present, and /api/ai/chat is a
+// normal server route reachable the same way regardless of what's rendering
+// the page. So the only thing the isElectron check was actually gating was
+// "does the button open at all" — which broke testing outside Electron for
+// no corresponding safety/capability reason. Mount whenever MnAI is on the
+// page; storage.js's own tiering + the settings panel's honest
+// "stored unencrypted" copy (see keyStorageDescription()) keep the
+// non-Electron case truthful about what it's doing.
+if (window.MnAI) {
   window.MnAI.mount({
     triggerEl: document.getElementById('agent-action'),
     // Stage 4: lets ai-src/agentRunner.js reach the live editor to insert
@@ -1319,6 +1361,11 @@ if (window.manuscriptDesktop?.isElectron && window.MnAI) {
     // MnAI), since `liveEditor` is reassigned on every chapter open — see
     // agentRunner.js's module comment for why that matters.
     getEditor: () => liveEditor,
+    // Stage 5: lets 'all' scope in agentRunner.js tell which manifest entry
+    // is the one currently mounted live, so that chapter's notes go through
+    // the live editor (spliceNotes) instead of the raw-file read/write path
+    // every other chapter uses.
+    getCurrentPath: () => currentPath,
   });
 }
 

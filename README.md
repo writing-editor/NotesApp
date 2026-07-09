@@ -14,6 +14,7 @@ Your writing lives in plain markdown files inside a folder called the **vault** 
 - **Renders** markdown properly (headings, bold, italics, lists, blockquotes) instead of showing raw text.
 - **Lets you edit** any paragraph in place by clicking it.
 - **Lets you add margin notes** — a note is stored right in the text as `[mn: your note here]`, or typed as `[mn.todo: ...]` / `[mn.query: ...]` / `[mn.ref: ...]` for different note categories.
+- **Runs an AI agent against your manuscript** (desktop-only) — configure a provider, an agent profile, and a scope, hit Run, and the agent reads your chapter(s) and drops `[mn.ai: ...]` notes into the text using the exact same note-insertion mechanism the manual note UI uses. The agent never rewrites your prose — it can only insert notes at specific positions. See "The AI Agent" below.
 - **Remembers your place** — reopening the app returns you to the last chapter and scroll position you were at.
 - **Syncs via git** — edits are staged as you go; everything pending is bundled into a single commit the moment you tap **Push**. Pulling from GitHub (or any git remote) is likewise manual, on your command, from the Settings sheet.
 - Works as:
@@ -34,11 +35,13 @@ your-repo/
     ├── chapters/
     │   ├── 01-chapter one.md
     │   └── 02-chapter two.md
-    └── back/
-        └── 01-acknowledgements.md
+    ├── back/
+    │   └── 01-acknowledgements.md
+    └── agents/           ← optional — your own AI agent profiles, see "The AI Agent" below
+        └── continuity-checker.md
 ```
 
-- Filenames are numbered so they sort in reading order; the number prefix and dashes are stripped for display (`01-chapter one.md` → "chapter one" in the sidebar).
+- Filenames are numbered so they sort in reading order; the number prefix and dashes are stripped for display (`01-chapter one.md` → "chapter one" in the sidebar). This applies to `agents/` too — it's read and listed the same way front/chapters/back are.
 - `_meta.md` can contain a YAML frontmatter block:
   ```
   ---
@@ -87,6 +90,18 @@ On the desktop (Electron) app, the token is encrypted at rest using the OS's own
 
 **Known current limitation:** conflict resolution (if you edit the same file on two devices before syncing) isn't handled gracefully yet — if you hit a conflict, resolve it from the laptop or desktop app for now.
 
+### The AI Agent (desktop only)
+
+A button in the sidebar footer (next to Vault and Sync) opens the Agent settings panel. This is a configure-then-run agent, not a chat window — there's no back-and-forth conversation, just: pick a provider, pick an agent profile, pick a scope, hit Run.
+
+**Connection.** Choose a provider (Claude, OpenAI, Gemini, or a local Ollama instance), a model, and an API key (or, for Ollama, a base URL instead of a key). Each provider remembers its own key and its own last-used model — switching from Claude to OpenAI and back restores both automatically, and you can always change either and re-save.
+
+**Agent profile.** Instead of a free-text box, you pick an agent from a dropdown — each entry is a `.md` file whose contents *are* that agent's instructions. A couple of default agents ship with the app so there's something to try immediately; your own agents live as `.md` files in your vault's `agents/` folder (see the vault layout above), are version-controlled and synced right alongside your manuscript, and show up in both the dropdown and the sidebar like any other file — because they're plain instructions in plain text, you can open one and edit it exactly like a chapter. If you write your own agent file, see the developer section below for the exact format the app expects it to produce, so the agent's output doesn't get silently dropped.
+
+**Scope.** Run against just the currently open chapter, or against every file in the vault (front matter, chapters, and back matter). "All chapters" makes one request per file, so a large manuscript will take a while and use one provider call per chapter.
+
+**What actually happens on Run.** The agent reads the chapter text you scoped it to and comes back with a list of notes to add and *where* to add them. Those become `[mn.ai: ...]` notes, inserted using the exact same mechanism the manual "add note" button uses. The agent cannot rewrite, delete, or reorder anything already in your file — inserting a note is the only thing it's able to do to your manuscript. You'll see a short summary when a run finishes (how many notes were added, and where); per-run undo (a one-click "remove exactly what this run added," separate from your editor's regular undo) is planned but not built yet — for now, remove an unwanted agent note the same way you'd remove any note.
+
 ---
 
 ## Part 2 — For the developer (or an LLM picking this project back up)
@@ -95,9 +110,10 @@ On the desktop (Electron) app, the token is encrypted at rest using the OS's own
 
 ```
 AppCode/     — the actual app: Express server, frontend, CodeMirror editor, markdown/note parser
+AppCode/ai-src/ — the AI Agent feature: settings panel, provider-call plumbing, note-splicing (see below)
 electron/    — thin desktop wrapper around AppCode/server.js (Linux build via electron-builder)
 mobile/      — Capacitor Android shell; ports AppCode's API to a Service Worker (see below)
-book/        — an example/your own vault (front/chapters/back structure described above)
+book/        — an example/your own vault (front/chapters/back/agents structure described above)
 ```
 
 ### The frontend editor (CodeMirror 6)
@@ -207,7 +223,57 @@ Lives in `AppCode/lib/parse.js` (ported verbatim into `mobile-sw.js`, since it's
 2. Splits the document into blocks (paragraphs) separated by blank lines, tracking each block's starting character offset.
 3. Renders headings/lists/blockquotes/code fences via `marked`, and hand-rolls inline formatting (`**bold**`, `*italic*`, `~~strike~~`) plus span wrapping for individually-addressable text runs.
 
-If you ever need to change note syntax or add a new note type, this is the one place to edit — the regex `MN_RE` and the `NOTE_TYPE_CLASS` map define what's recognized.
+If you ever need to change note syntax or add a new note type, this is the one place to edit — the regex `MN_RE` and the `NOTE_TYPE_CLASS` map define what's recognized. There are four types today: `query`, `ref`, `todo`, and `ai`. `ai` is written only by the Agent feature (below) — there's deliberately no manual UI button to assign it by hand; a human can retype an agent-written note *away* from `ai` using the existing retype row, but nothing lets a human assign `ai` directly.
+
+### The AI Agent (`ai-src/`, `lib/ai-proxy.js`)
+
+Desktop-only, configure-then-run agent. A third sidebar-footer button (`#agent-action`) opens its own settings drawer (reusing the Sync drawer's `.settings-*` CSS classes in its own DOM tree, not the Sync drawer's actual nodes). No chat transcript — Run either produces new `[mn.ai: ...]` notes in the manuscript or a run-status/error line in the panel itself.
+
+**The one constraint that matters more than anything else in this feature: the agent cannot rewrite a file.** It is never given write access to a file and its output is never treated as "the new file contents." The model is handed a block of chapter text and asked to return *only* a JSON array of note placements — `{ charPos, content }` pairs, `charPos` being a character offset into the text exactly as sent. Two functions are the entire write surface for this feature:
+
+- `ai-src/noteSplice.js`'s `spliceNotes()` — calls the live editor's existing `insertNoteAt(charPos, content, 'ai')`, the same function the manual "add note" UI already uses.
+- `ai-src/noteSplice.js`'s `spliceIntoRawText()` — the same operation as a pure string splice, for chapters with no live editor instance (used by "all chapters" scope against `/api/raw`).
+
+Both only ever *insert* a marker at a position; neither reads-then-replaces a range, so nothing else in the file — prose, other notes, anything — can be altered by an agent run, by construction. Keep this true for any future change to this feature; it's the single biggest thing protecting a manuscript from a hallucinating model, and is spelled out in more detail below.
+
+**Component map:**
+
+```
+AppCode/ai-src/
+  main.js            mount() entry point — window.MnAI.mount({ triggerEl, getEditor, getCurrentPath })
+  settingsPanel.js    builds the settings drawer, owns open/close/Save/Run/Cancel and the status line
+  storage.js          3-tier secret storage (API keys, per-provider) + plain localStorage (non-secret config)
+  agentRunner.js       runAgent()/cancelAgent() — resolves scope, calls /api/ai/chat, hands results to noteSplice.js
+  noteSplice.js        applies { charPos, content } placements to a doc (see above)
+  build.js             esbuild config → public/mn-ai.bundle.js
+AppCode/lib/ai-proxy.js — server-side provider dispatch + response validation (see below)
+electron/ai-keystore.js — one ai-keys.enc file, safeStorage-encrypted, JSON blob keyed by provider
+```
+
+**Where the LLM call happens.** Server-side only, via one inline route, `POST /api/ai/chat` in `server.js`, calling `lib/ai-proxy.js`'s single exported `chat({ provider, model, apiKey, ollamaUrl, systemPrompt, chapterText })`. This dispatches to `callClaude`/`callOpenAI`/`callGemini`/`callOllama` — thin wrappers around each provider's REST endpoint via Node's global `fetch`, no provider SDKs. Same "function library + inline routes in `server.js`," not a mounted sub-router, as `lib/git-Sync.js`.
+
+**The prompt contract — required reading if you're writing your own agent `.md` file.** Every provider call is built from two parts, concatenated: a fixed instruction block this app controls, plus whatever `.md` file you selected as the agent profile. The fixed block is what tells the model to return *only* a JSON array of `{ charPos, content }` objects and nothing else — your agent file's job is to describe *what to look for and what to say*, not *how to format the response*; the app supplies that half unconditionally, appended, never replaced. In practice this means a good agent `.md` file:
+
+- Describes the agent's purpose and voice in plain prose (e.g. "Flag continuity errors and unresolved plot threads. Be terse — one sentence per note. Do not comment on prose style.").
+- Should **not** try to specify its own output format, JSON shape, or field names — that's the fixed instruction block's job, and duplicating or contradicting it risks confusing the model into a shape the parser below won't recognize.
+- Any placement the model returns that isn't a well-formed `{ charPos, content }` entry is silently dropped, not an error for the whole run — a bad agent file degrades to fewer/no notes, not a crash, but "fewer notes than expected" is the debugging signal that the agent file may be interfering with the format instructions rather than staying in its lane.
+
+The raw provider response then goes through two shared, exported-for-testing steps in `ai-proxy.js`: `extractJsonArray()` (tolerates a code fence or wrapping prose — models don't reliably return bare JSON) and `resolvePlacements()` (drops any entry with non-string/empty `content` or non-finite `charPos`; clamps an in-range-but-slightly-off `charPos` rather than rejecting it). `chat()` itself never throws — failures resolve as `{ ok: false, error }`.
+
+**The two-part invariant check (pre-write + post-write).** Because the write surface is insert-only by construction (above), the actual risk from a hallucinating model isn't manuscript corruption — it's a note landing somewhere that damages an *existing* note, or (in principle) a future regression to `noteSplice.js` quietly breaking the insert-only guarantee. Two cheap, automatic checks cover both:
+
+- **Pre-write (server-side, `ai-proxy.js`).** `resolvePlacements()` now also takes the set of existing `[mn.*: ...]` marker spans in the chapter text (computed by `findExistingNoteSpans()`, a small standalone scanner using the same marker regex `lib/parse.js` uses) and **rejects outright** — does not clamp — any placement whose `charPos` would land strictly inside one of those spans, since there's no safe position to clamp it to that isn't itself a guess. `resolvePlacements()` returns `{ placements, rejected }`, and `chat()`'s response shape is now `{ ok: true, placements, rejected }` — `rejected` is a count, not an error; a nonzero value means the check caught something, which is the feature working as intended.
+- **Post-write (client-side, `noteSplice.js`).** `verifyInsertOnly(before, after)` strips every `[mn.ai: ...]` marker back out of the post-splice text and diffs the result against a snapshot taken immediately before the splice. Anything other than an exact match means something wrote outside the insert-only contract — this turns "the write path is safe by construction" from a fact about today's code into a continuously self-checking guarantee that would catch a future regression. `agentRunner.js` calls this around every splice (both the live-editor path and the raw-file path, in both 'chapter' and 'all' scope) and folds a failure into the run's status line as a `Warning: ...` rather than attempting an automatic rollback — by the time the check runs, the write has already landed, and reverting risks discarding unrelated edits the person made mid-run.
+
+Both checks report through the same `detail` string the settings panel already renders under the run status: a rejected-placement count reads as `"N placement(s) rejected — proposed position overlapped an existing note."`; a failed post-write check reads as a `Warning:` line naming the affected chapter(s). Neither one blocks or fails the run on its own.
+
+**Agent profile files.** Two tiers, merged: a small set of app-bundled defaults (ship read-only, not copied into a vault), and per-vault overrides in the vault's `agents/` folder (git-synced with the manuscript, listed in the manifest the same way front/chapters/back are). A vault file with the same name as a bundled default shadows it.
+
+**Key & config storage.** Same 3-tier pattern as the git PAT (Capacitor → Electron `safeStorage` via `electron/ai-keystore.js` → `localStorage`), one `ai-keys.enc` file keyed by provider. Non-secret config (provider, per-provider model, Ollama URL, scope, mode, selected agent file) lives in one `localStorage` JSON blob, `ai-agent-config` — model is stored per-provider (a small map), the same way keys already are, so switching providers restores both.
+
+**Known current limitation: no read-only/preview mode yet.** The Mode selector in the settings panel has a "Read-only" option, but choosing it and hitting Run currently fails fast with a clear "not implemented yet" message rather than silently running read-write. The pre-write check above already validates and computes placements without touching the document, so a real preview (show the would-be notes, require an explicit "Apply" to actually splice them) is a comparatively small addition on top of what exists — not yet built.
+
+**Scope.** "Current chapter" reads the live in-memory doc (`editor.getDoc()`), not disk, since the editor may be ahead of what's persisted. "All chapters" walks `/api/manifest` (front + chapters + back — the whole vault, not just `chapters/`) and makes one `/api/ai/chat` call per file, sequentially, so Cancel (a single module-level `AbortController` in `agentRunner.js`) works mid-batch. Whichever file matches the currently-open chapter still writes through the live-editor path so the screen stays in sync; every other file goes through `/api/raw` GET then PUT. A file that errors or comes back empty is skipped, not fatal to the run.
 
 ### Build pipelines
 
@@ -252,6 +318,7 @@ Read, in this order:
 4. `AppCode/mobile-sw.js` — the mobile backend, if you're touching mobile.
 5. `AppCode/public/client.js` — the shared frontend, works against any of the three backends.
 6. `AppCode/editor-src/*.js` — the CodeMirror 6 editor `client.js` mounts; read this before changing anything related to editing, note markers, or margin-chip layout.
+7. `AppCode/ai-src/*.js` and `AppCode/lib/ai-proxy.js` — the AI Agent feature, if you're touching that; read "The AI Agent" section above first, especially the insert-only write-surface constraint, before changing `noteSplice.js` or `ai-proxy.js`.
 
 Before adding any new route or feature: check whether it already exists in `server.js` first. The Electron shell needs no porting (it runs `server.js` directly) — only the mobile Service Worker needs a matching port, following the same LightningFS/isomorphic-git patterns already established there. If a feature is genuinely laptop/desktop-only (filesystem browsing, PDF export via Puppeteer/Typst), don't port it to mobile — stub it with a clear error message instead, as done for `/api/export/pdf`.
 
@@ -287,12 +354,6 @@ Flagged during a full pass through the codebase, September 2026-era iteration. L
 - `autoCommit()` / `commitFile()` in both `AppCode/server.js` and `AppCode/mobile-sw.js` — leftover from the pre-batch-commit design (see "Staging vs. committing vs. push" above). No route in either file calls them.
 - `commitFile()` in `AppCode/lib/git-Sync.js` — exported, but its only caller was the dead `autoCommit()` in `server.js`.
 - The commented-out `//const { generatePdf } = require('./lib/pdf');` on `server.js:11`.
-
-**Fixed since first flagged:**
-- ~~The "Install embedded Node.js dependencies" step in `build-android-apk.yml`~~ — removed. It `cd`'d into `mobile/www/nodejs`, a directory `sync-server-files.js` never creates under the current Service Worker/LightningFS architecture; leftover from an abandoned earlier design. Gone now.
-
-**Broken, not just redundant — likely an actual CI failure:**
-(none currently known — see "Fixed since first flagged" above for the one that was here)
 
 **Technically reachable but effectively unused — defensive fallback, safe to leave:**
 - The count-based fallback branch inside `deleteNote()` in both `server.js` and `mobile-sw.js` (used only when `charPos` is omitted from a delete request). The only frontend caller, `client.js`, always sends `charPos`, so this path only fires if a request is built by hand or by a future caller that skips it.

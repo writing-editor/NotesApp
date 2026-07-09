@@ -85,28 +85,104 @@ const CONFIG_KEY = 'ai-agent-config';
 
 const DEFAULT_CONFIG = {
   provider: 'claude',
-  model: '',
+  // Per-provider model memory (plan.md §4) — replaces the old flat `model`
+  // field. Not a secret, so plain localStorage, same tier as everything
+  // else in this blob; only the *key* goes through the 3-tier storage above.
+  models: {
+    claude: '',
+    openai: '',
+    gemini: '',
+    ollama: '',
+  },
   ollamaUrl: '',
-  systemPrompt: '',
+  // Agent profile (plan.md §2) — a reference to a file's `key` (see
+  // server.js's /api/agents), not the prompt text itself. Replaces the old
+  // flat `systemPrompt` string; empty means "nothing selected yet."
+  agentKey: '',
   scope: 'chapter',
   mode: 'read-write',
 };
 
+// One-time normalization from the old flat `model` field to the new
+// per-provider `models` map (plan.md §4 "Migration for existing installs").
+// Runs every time getAgentConfig() loads a parsed blob still carrying the
+// old field; idempotent since the old field is deleted immediately after
+// seeding, so it only ever fires once per install.
+function migrateFlatModel(parsed) {
+  if (!parsed || typeof parsed.model !== 'string') return parsed;
+  const provider = parsed.provider || DEFAULT_CONFIG.provider;
+  const models = { ...DEFAULT_CONFIG.models, ...(parsed.models || {}) };
+  if (parsed.model && !models[provider]) {
+    models[provider] = parsed.model;
+  }
+  const { model, ...rest } = parsed;
+  return { ...rest, models };
+}
+
+// One-time migration from the old flat `systemPrompt` string (plan.md §2
+// "Note for whoever builds this next") to a file-based agent reference.
+// Unlike migrateFlatModel() above, this can't finish synchronously —
+// turning the old prompt into `models[provider]` was pure localStorage
+// surgery, but turning it into an agent reference means writing a real
+// file (VAULT/agents/Custom.md) through the server, so nobody's saved
+// prompt silently vanishes. Exported so main.js can call this once at
+// mount time, before the settings panel is ever opened; getAgentConfig()
+// itself stays synchronous and just ignores a lingering `systemPrompt`
+// field until this has had a chance to run (harmless — it's simply not
+// read by anything anymore once agentKey exists).
+export async function migrateLegacySystemPrompt() {
+  try {
+    const raw = window.localStorage.getItem(CONFIG_KEY);
+    if (!raw) return;
+    const parsed = JSON.parse(raw);
+    if (!parsed.systemPrompt || typeof parsed.systemPrompt !== 'string' || parsed.agentKey) return;
+
+    const res = await fetch('/api/agents/migrate-legacy-prompt', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content: parsed.systemPrompt }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data?.error || `migration failed (${res.status})`);
+    const key = data.key || 'Custom';
+
+    const { systemPrompt, ...rest } = parsed;
+    window.localStorage.setItem(CONFIG_KEY, JSON.stringify({ ...rest, agentKey: key }));
+  } catch (e) {
+    // No vault selected yet, server unreachable, etc. — non-fatal. The
+    // settings panel just shows "no agent selected," same as a fresh
+    // install, and this is retried the next time mount() runs.
+    console.warn('[ai-settings] legacy system-prompt migration skipped:', e.message);
+  }
+}
+
 export function getAgentConfig() {
   try {
     const raw = window.localStorage.getItem(CONFIG_KEY);
-    if (!raw) return { ...DEFAULT_CONFIG };
-    const parsed = JSON.parse(raw);
-    return { ...DEFAULT_CONFIG, ...parsed };
+    if (!raw) return { ...DEFAULT_CONFIG, models: { ...DEFAULT_CONFIG.models } };
+    const parsed = migrateFlatModel(JSON.parse(raw));
+    const merged = {
+      ...DEFAULT_CONFIG,
+      ...parsed,
+      models: { ...DEFAULT_CONFIG.models, ...(parsed.models || {}) },
+    };
+    return merged;
   } catch {
-    return { ...DEFAULT_CONFIG };
+    return { ...DEFAULT_CONFIG, models: { ...DEFAULT_CONFIG.models } };
   }
 }
 
 export function setAgentConfig(partial) {
   try {
     const current = getAgentConfig();
-    const next = { ...current, ...partial };
+    // Shallow-merge everything except `models`, which merges one level
+    // deeper so saving under one provider doesn't clobber another
+    // provider's remembered model.
+    const next = {
+      ...current,
+      ...partial,
+      models: { ...current.models, ...(partial.models || {}) },
+    };
     window.localStorage.setItem(CONFIG_KEY, JSON.stringify(next));
     return next;
   } catch (e) {

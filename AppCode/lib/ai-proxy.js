@@ -15,10 +15,17 @@
 //   3. Parse + validate the model's raw text response into placements of
 //      the shape { charPos, content }, resolving against chapterText so a
 //      bad/out-of-range offset from the model can't corrupt the document.
-//   4. Return { ok: true, placements } or { ok: false, error }. Never
-//      throws out of `chat()` itself — server.js's route handler still
-//      wraps the call in try/catch as a second line of defense, same
-//      convention as every other route in server.js.
+//      Includes plan.md §3's pre-write invariant check: a placement whose
+//      charPos would land inside an existing `[mn.*: ...]` note's marker
+//      span is rejected outright (not clamped), since clamping there has no
+//      safe destination — see resolvePlacements()'s comment below.
+//   4. Return { ok: true, placements, rejected } or { ok: false, error }.
+//      `rejected` is the count of placements dropped by the §3 check above
+//      (0 when nothing was dropped) — server.js's route passes it straight
+//      through, agentRunner.js folds it into the run summary. Never throws
+//      out of `chat()` itself — server.js's route handler still wraps the
+//      call in try/catch as a second line of defense, same convention as
+//      every other route in server.js.
 //
 // Key handling: request-scoped only, exactly like the git PAT today (see
 // CONTEXT.md §6) — the key arrives in the POST body per-request, is used
@@ -31,6 +38,46 @@
 // dependency surface as small as the job allows.
 
 'use strict';
+
+// ── §3 hallucination-protection: pre-write invariant check ──────────────────
+//
+// Finds every existing `[mn...: ...]` note marker's [start, end) span in a
+// chunk of raw text, so resolvePlacements() below can reject (not clamp) any
+// model-proposed charPos that would land *inside* one of those spans — which
+// would otherwise silently split an existing note's marker in half when the
+// insertion happens (both spliceNotes()'s insertNoteAt() and
+// spliceIntoRawText() are plain string/position inserts; neither one knows or
+// cares whether the position it's given sits inside another marker).
+//
+// Deliberately a small standalone scanner using the same marker shape
+// lib/parse.js's MN_RE matches, rather than importing parseMd() itself —
+// parseMd() returns per-note charPos but not each match's *length*, and its
+// output shape (HTML + segment spans) is tuned for the browser-render path,
+// not for "give me every existing marker's span." Keeping this local avoids
+// changing parseMd()'s return shape for a second consumer with different
+// needs; the two are kept in sync by using the identical regex literal.
+const MN_MARKER_RE = /\[mn(?:\.(\w+))?\s*:\s*([\s\S]*?)\]/g;
+
+function findExistingNoteSpans(text) {
+  const spans = [];
+  if (typeof text !== 'string' || !text) return spans;
+  const re = new RegExp(MN_MARKER_RE.source, MN_MARKER_RE.flags);
+  let m;
+  while ((m = re.exec(text)) !== null) {
+    spans.push({ start: m.index, end: m.index + m[0].length });
+  }
+  return spans;
+}
+
+// True if `pos` falls strictly inside an existing marker's span (not at its
+// exact boundaries — inserting exactly at a span's start or end is fine,
+// since that's "before" or "after" the existing note, not "through" it).
+function landsInsideExistingNote(pos, spans) {
+  for (const { start, end } of spans) {
+    if (pos > start && pos < end) return true;
+  }
+  return false;
+}
 
 // ── Shared placement-parsing step ───────────────────────────────────────────
 //
@@ -67,19 +114,36 @@ function extractJsonArray(rawText) {
   return parsed;
 }
 
-// Validates + clamps raw placements against the actual chapter text length.
-// - charPos must be a finite number; it's clamped into [0, chapterText.length]
-//   rather than rejected outright, since an off-by-a-little offset (e.g. the
-//   model counting a trailing newline differently) shouldn't lose an
-//   otherwise-good note — insertNoteAt() on the client just inserts at a
-//   document position, so a clamped position is still safe, just possibly
-//   a character or two off.
+// Validates raw placements against the actual chapter text.
+// - charPos must be a finite number; out-of-range values are clamped into
+//   [0, chapterText.length] rather than rejected outright, since an
+//   off-by-a-little offset (e.g. the model counting a trailing newline
+//   differently) shouldn't lose an otherwise-good note — insertNoteAt() on
+//   the client just inserts at a document position, so a clamped position
+//   is still safe, just possibly a character or two off.
 // - content must be a non-empty string after trimming.
-// - Entries failing either check are dropped silently; this function never
-//   throws.
-function resolvePlacements(rawPlacements, chapterText) {
+// - §3 stricter check: a charPos landing *inside* an existing `[mn.*: ...]`
+//   marker's span is REJECTED, not clamped — clamping there would move the
+//   insertion to a span boundary silently, which either merges into an
+//   adjacent note's text or (worse) still lands mid-marker after rounding.
+//   Rejecting is the only safe move for this one case, since there's no
+//   nearby "correct" position to clamp to that isn't itself a guess. Existing
+//   note spans are computed once per call via findExistingNoteSpans() and
+//   passed in as `existingSpans` — cheap, since the model returns at most a
+//   few dozen placements per call and a manuscript chapter has at most a
+//   few dozen existing notes.
+// - Entries failing either the content or charPos-finite check are dropped
+//   silently, same as before. Entries rejected for landing inside an
+//   existing marker are reported separately via the returned `rejected`
+//   count, since that's a signal worth surfacing (a run that rejected
+//   several placements likely got confused about offsets) rather than
+//   silently disappearing the way a malformed/empty entry does.
+// - This function never throws.
+function resolvePlacements(rawPlacements, chapterText, existingSpans) {
   const maxPos = typeof chapterText === 'string' ? chapterText.length : 0;
+  const spans = Array.isArray(existingSpans) ? existingSpans : [];
   const out = [];
+  let rejected = 0;
   for (const p of rawPlacements) {
     if (!p || typeof p !== 'object') continue;
     const content = typeof p.content === 'string' ? p.content.trim() : '';
@@ -87,9 +151,13 @@ function resolvePlacements(rawPlacements, chapterText) {
     let charPos = Number(p.charPos);
     if (!Number.isFinite(charPos)) continue;
     charPos = Math.max(0, Math.min(Math.round(charPos), maxPos));
+    if (landsInsideExistingNote(charPos, spans)) {
+      rejected++;
+      continue;
+    }
     out.push({ charPos, content });
   }
-  return out;
+  return { placements: out, rejected };
 }
 
 // Builds the instruction wrapper common to every provider — the per-provider
@@ -232,7 +300,7 @@ const ADAPTERS = {
 //                                        systemPrompt, chapterText });
 //
 // Always resolves (never rejects) with either:
-//   { ok: true, placements: [{ charPos, content }, ...] }
+//   { ok: true, placements: [{ charPos, content }, ...], rejected: <number> }
 //   { ok: false, error: '<message safe to show in the settings panel>' }
 async function chat({ provider, model, apiKey, ollamaUrl, systemPrompt, chapterText }) {
   const adapter = ADAPTERS[provider];
@@ -253,9 +321,15 @@ async function chat({ provider, model, apiKey, ollamaUrl, systemPrompt, chapterT
   }
 
   const rawPlacements = extractJsonArray(rawText);
-  const placements = resolvePlacements(rawPlacements, chapterText);
+  const existingSpans = findExistingNoteSpans(chapterText);
+  const { placements, rejected } = resolvePlacements(rawPlacements, chapterText, existingSpans);
 
-  return { ok: true, placements };
+  // Surfaced but non-fatal: a run that rejected placements still returns
+  // ok:true with whatever's left — see agentRunner.js/settingsPanel.js for
+  // how `rejected > 0` is folded into the run summary rather than treated
+  // as an error, since "the model proposed something bad and we caught it"
+  // is exactly this check working as intended, not a failure of the run.
+  return { ok: true, placements, rejected };
 }
 
 module.exports = {
@@ -263,4 +337,5 @@ module.exports = {
   // Exported for unit testing only — server.js only ever calls chat().
   _extractJsonArray: extractJsonArray,
   _resolvePlacements: resolvePlacements,
+  _findExistingNoteSpans: findExistingNoteSpans,
 };

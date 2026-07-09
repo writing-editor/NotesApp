@@ -1,0 +1,1 @@
+this is a text case. Can you put [mn.type.ai:this is ai note] into the last line of this chapter. 

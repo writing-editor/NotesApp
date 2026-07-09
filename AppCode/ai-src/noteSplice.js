@@ -82,3 +82,105 @@ export function spliceNotes({ editor, placements, onAfterMutation } = {}) {
 
   return inserted;
 }
+
+// ── Raw-text splice (Stage 5 — multi-chapter scope) ────────────────────────
+//
+// spliceNotes() above only ever writes into the *live* CM6 document, which
+// holds exactly one chapter at a time (client.js's `liveEditor`). Stage 5's
+// "All chapters" scope needs to write notes into chapters that aren't the
+// one currently open — for those, there's no live editor instance to call
+// insertNoteAt() on, so agentRunner.js instead reads/writes them as plain
+// strings through the existing `/api/raw` GET/PUT routes (the same ones the
+// full-chapter edit mode already uses for whole-file reads/writes — no new
+// server route needed).
+//
+// This function builds the *same* `[mn.ai: content]` marker insertNoteAt()
+// builds (kept in sync by hand — see that function's marker line — since
+// duplicating the one-line format here is simpler than exporting a shared
+// helper across the editor-src/ai-src boundary for a single string
+// template), applied back-to-front for the same reason spliceNotes() does:
+// each insertion shifts every character after it, so later positions must
+// be applied before earlier ones stay valid.
+//
+// Deliberately a pure string function (no fetch, no DOM) so it's easy to
+// unit-test and so agentRunner.js stays the only place that knows about
+// `/api/raw`'s request shape.
+/**
+ * @param {string} rawText
+ * @param {Array<{ charPos: number, content: string }>} placements
+ * @returns {{ text: string, inserted: number }}
+ */
+export function spliceIntoRawText(rawText, placements) {
+  if (typeof rawText !== 'string') return { text: rawText, inserted: 0 };
+  if (!Array.isArray(placements) || placements.length === 0) {
+    return { text: rawText, inserted: 0 };
+  }
+
+  const ordered = [...placements].sort((a, b) => b.charPos - a.charPos);
+
+  let text = rawText;
+  let inserted = 0;
+  for (const { charPos, content } of ordered) {
+    if (typeof content !== 'string' || !content.trim()) continue;
+    if (!Number.isFinite(charPos)) continue;
+    // Clamp defensively — ai-proxy.js's resolvePlacements() should already
+    // have done this against the chapterText it was given, but that was a
+    // snapshot read at fetch time; clamp again here rather than trust it
+    // still fits this exact string.
+    const pos = Math.max(0, Math.min(charPos, text.length));
+    const marker = `[mn.ai: ${content}]`;
+    text = text.slice(0, pos) + marker + text.slice(pos);
+    inserted++;
+  }
+
+  return { text, inserted };
+}
+
+// ── §3 post-write invariant check ──────────────────────────────────────────
+//
+// After a batch of placements has been spliced in (either write path above),
+// confirm the *only* change to the text is the insertion of well-formed
+// `[mn.ai: ...]` markers — nothing else moved, nothing else was deleted, no
+// pre-existing `[mn.*: ...]` marker (of any type) was altered. This is the
+// automated backstop plan.md §3 describes: the write path is safe by
+// construction today (both splice functions only ever insert), but this turns
+// that from a currently-true fact about the code into a continuously
+// self-checking guarantee that would catch a future regression.
+//
+// Method: strip every `[mn.ai: ...]` marker back out of `after`, and compare
+// the result to `before` verbatim. If they're not identical, something wrote
+// outside the insert-only contract. This deliberately strips *only* `ai`-type
+// markers (not `[mn.*: ...]` generally) — a run that somehow also removed or
+// altered an existing query/ref/todo note must NOT be masked by a blanket
+// strip of every marker type, since that's exactly the corruption this check
+// exists to catch.
+//
+// Pure string function — no DOM, no fetch — so it's usable from both the
+// live-editor path (agentRunner.js, comparing editor.getDoc() before/after)
+// and the raw-file path (comparing the fetched text before/after
+// spliceIntoRawText()).
+const AI_MARKER_RE = /\[mn\.ai\s*:\s*[\s\S]*?\]/g;
+
+/**
+ * @param {string} before  Text snapshot taken immediately before the splice.
+ * @param {string} after   Text snapshot taken immediately after the splice
+ *   (the live doc's getDoc(), or spliceIntoRawText()'s returned `text`).
+ * @returns {{ ok: boolean, detail?: string }}
+ *   ok:false means the invariant was violated — caller should treat the
+ *   write as suspect (see agentRunner.js: currently logs and flags rather
+ *   than attempting an automatic rollback, since by the time this runs the
+ *   write has already landed either in the live doc or on disk).
+ */
+export function verifyInsertOnly(before, after) {
+  if (typeof before !== 'string' || typeof after !== 'string') {
+    return { ok: false, detail: 'Missing before/after text to compare.' };
+  }
+  const stripped = after.replace(AI_MARKER_RE, '');
+  if (stripped !== before) {
+    return {
+      ok: false,
+      detail: 'Text outside the inserted notes changed — write did not match the insert-only contract.',
+    };
+  }
+  return { ok: true };
+}

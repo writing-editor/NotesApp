@@ -146,6 +146,99 @@ function buildManifest() {
 
 
 
+// ── Agent profiles (file-based, plan.md §2) ─────────────────────────────────
+// Two tiers, merged, vault-wins: app-bundled defaults (read-only, ship next
+// to this file, never copied into a vault) and per-vault overrides in
+// <VAULT>/agents/ (git-synced with the manuscript, same as front/chapters/
+// back). A vault file shadows a bundled default of the same stripped name.
+const DEFAULT_AGENTS_DIR = path.join(__dirname, 'agents', 'defaults');
+
+// Same leading-number/extension convention buildManifest()'s readSection()
+// already uses for chapters — an agent file is just a file, same rule, no
+// second naming convention to learn or document separately.
+function agentKey(filename) {
+  return filename.replace(/^\d+-/, '').replace(/\.md$/, '');
+}
+
+function readAgentDir(dir, source) {
+  if (!fs.existsSync(dir)) return [];
+  return fs.readdirSync(dir)
+    .filter(f => f.endsWith('.md') && !f.startsWith('_'))
+    .sort()
+    .map(f => ({
+      key:   agentKey(f),
+      label: agentKey(f).replace(/-/g, ' '),
+      source,
+      file:  path.join(dir, f),
+    }));
+}
+
+// The single place that resolves an agent key back to an absolute file
+// path — GET /api/agents and GET /api/agents/:key both call this so the
+// two routes can never disagree about which file a key actually means.
+function listAgents() {
+  const defaults = readAgentDir(DEFAULT_AGENTS_DIR, 'default');
+  const vault = VAULT ? readAgentDir(path.join(VAULT, 'agents'), 'vault') : [];
+  const byKey = new Map();
+  defaults.forEach(a => byKey.set(a.key, a));
+  vault.forEach(a => byKey.set(a.key, a)); // vault shadows default of the same key
+  return [...byKey.values()].sort((a, b) => a.label.localeCompare(b.label));
+}
+
+// List agents (merged, shadowed) with a short preview so the settings
+// panel's dropdown can show "(vault)" for overrides and a first-few-lines
+// preview without a second round-trip per entry.
+app.get('/api/agents', (req, res) => {
+  const agents = listAgents().map(a => {
+    let preview = '';
+    try {
+      preview = fs.readFileSync(a.file, 'utf8').trim().slice(0, 160);
+    } catch { /* unreadable — leave preview blank, don't fail the whole list */ }
+    return { key: a.key, label: a.label, source: a.source, preview };
+  });
+  res.json({ agents });
+});
+
+// Fetch one agent's full file contents — this is what agentRunner.js reads
+// as the system prompt for a run (plan.md §2 "Execution change").
+app.get('/api/agents/:key', (req, res) => {
+  const agent = listAgents().find(a => a.key === req.params.key);
+  if (!agent) return res.status(404).json({ error: 'Agent not found' });
+  try {
+    const content = fs.readFileSync(agent.file, 'utf8');
+    res.json({ key: agent.key, label: agent.label, source: agent.source, content });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// One-time migration helper (plan.md §2 "Note for whoever builds this
+// next"): a person's old free-text system prompt becomes the seed content
+// of a new vault-level agents/Custom.md file, so upgrading never silently
+// drops what they'd written. Idempotent-by-existence — if Custom.md is
+// already there (a previous migration, or the person's own file with that
+// name), it's left untouched and the existing key is simply returned.
+app.post('/api/agents/migrate-legacy-prompt', (req, res) => {
+  if (!VAULT) return res.status(400).json({ error: 'No vault selected' });
+  const { content } = req.body;
+  if (typeof content !== 'string' || !content.trim()) {
+    return res.status(400).json({ error: 'content required' });
+  }
+
+  const agentsDir = path.join(VAULT, 'agents');
+  const target = path.join(agentsDir, 'Custom.md');
+
+  try {
+    if (!fs.existsSync(target)) {
+      fs.mkdirSync(agentsDir, { recursive: true });
+      fs.writeFileSync(target, content, 'utf8');
+    }
+    res.json({ key: 'Custom' });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // Note write-back
 // ── Note write-back ──────────────────────────────────────────────────────────
 
@@ -366,11 +459,15 @@ app.post('/api/git/config', (req, res) => {
 //   VAULT itself, since the live-in-editor text may not be flushed to disk
 //   yet. Client is responsible for gathering scope; Stage 4's agentRunner.js
 //   is the caller.
-// - Returns { ok: true, placements: [{ charPos, content }, ...] } on success,
-//   or { ok: false, error } — including from an adapter-level throw, which
-//   ai-proxy.chat() already catches internally and turns into { ok: false }
-//   rather than rejecting, but this route still wraps in try/catch as a
-//   second line of defense, matching every other route's convention here.
+// - Returns { ok: true, placements: [{ charPos, content }, ...], rejected }
+//   on success, or { ok: false, error } — including from an adapter-level
+//   throw, which ai-proxy.chat() already catches internally and turns into
+//   { ok: false } rather than rejecting, but this route still wraps in
+//   try/catch as a second line of defense, matching every other route's
+//   convention here. `rejected` (plan.md §3) is the count of placements
+//   ai-proxy.chat() dropped for proposing a position inside an existing
+//   note's marker span — this route forwards it as-is, no extra handling
+//   needed here.
 app.post('/api/ai/chat', async (req, res) => {
   const { provider, model, apiKey, ollamaUrl, systemPrompt, chapterText } = req.body;
   if (!provider) return res.status(400).json({ error: 'provider required' });

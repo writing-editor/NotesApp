@@ -38,6 +38,16 @@
   margin-top: 0.1rem;
 }
 
+/* Read-only preview of the selected agent file's first few lines (Stage 6
+   §2) — block-level (not inline like most .settings-section small notes)
+   since it can run to a couple of lines, and italic to read as "quoted
+   file contents" rather than app-authored status text. */
+#ai-agent-preview {
+  display: block;
+  font-style: italic;
+  opacity: 0.8;
+}
+
 #ai-run-status {
   border-top: 1px solid var(--rule);
   padding-top: 0.8rem;
@@ -50,4 +60,76 @@
 #ai-save-config:disabled,
 #ai-run-agent:disabled {
   opacity: 0.35;
+}
+
+/* Stage 6: small spinner shown inside the Run button while a run is in
+   flight, alongside the existing status <small> below the buttons — that
+   line is easy to miss (especially mid-scroll or on "All chapters" scope,
+   where a run can take a while), so the button now carries its own busy
+   state too. Pure CSS, no extra markup beyond the one <span>. */
+.ai-btn-spinner {
+  display: inline-block;
+  width: 0.75rem;
+  height: 0.75rem;
+  margin-right: 0.4rem;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  vertical-align: -0.1rem;
+  opacity: 0.6;
+  animation: ai-spin 0.7s linear infinite;
+}
+
+@keyframes ai-spin {
+  to { transform: rotate(360deg); }
+}
+
+/* Stage 6 read-only/preview mode — one row per proposed note. Kept visually
+   distinct from the run-status area (its own bordered block) since it's an
+   actionable list, not a status message. */
+.ai-preview-list {
+  max-height: 12rem;
+  overflow-y: auto;
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+  margin-top: 0.4rem;
+}
+
+.ai-preview-file-label {
+  font-family: var(--font-ui);
+  font-size: 0.75rem;
+  font-weight: 600;
+  padding: 0.4rem 0.6rem 0.2rem;
+  opacity: 0.7;
+}
+
+.ai-preview-item {
+  display: flex;
+  gap: 0.5rem;
+  padding: 0.35rem 0.6rem;
+  border-top: 1px solid var(--rule);
+  font-size: 0.8rem;
+  line-height: 1.4;
+}
+
+.ai-preview-item:first-child,
+.ai-preview-file-label + .ai-preview-item {
+  border-top: none;
+}
+
+.ai-preview-item-pos {
+  flex: 0 0 auto;
+  opacity: 0.5;
+  font-variant-numeric: tabular-nums;
+}
+
+.ai-preview-item-content {
+  flex: 1 1 auto;
+}
+
+/* Stage 6 per-run undo — a plain settings-btn like Save/Run/Cancel, no
+   special colour treatment; it's a normal action, not a destructive-looking
+   one, since it only ever removes exactly what the last run added. */
+#ai-undo-run:disabled {
+  opacity: 0.5;
 }

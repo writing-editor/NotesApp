@@ -550,29 +550,31 @@
     .chapter-toc a:hover { color: var(--ink); }
 
   /* ── Sidebar Footer ── */
+    /* Icon-only, borderless, text-free buttons. The three sit in a single
+       row (see index.html's wrapping div, which owns the one border-top
+       separating this row from the nav above) and split that row evenly
+       via flex:1 — no border-right dividers between them anymore. Each
+       button's accessible label now lives in its `title` attribute
+       (tooltip) rather than a visible <span>. */
     .sidebar-footer {
-      padding: 1rem 1.2rem;
-      border-top: 1px solid var(--rule);
+      flex: 1;
+      padding: 0.9rem 0;
       display: flex;
       align-items: center;
-      gap: 0.6rem;
+      justify-content: center;
       cursor: pointer;
       color: var(--ink-faint);
-      font-family: var(--font-ui);
-      font-size: 0.65rem;
-      text-transform: uppercase;
-      letter-spacing: 0.1em;
-      transition: color 0.15s;
+      transition: color 0.15s, background 0.15s;
       flex-shrink: 0;
     }
-    .sidebar-footer:hover { color: var(--ink); }
-    
-    /* Force the icon to be small */
-    .sidebar-footer svg { 
-      width: 16px !important; 
-      height: 16px !important; 
-      flex-shrink: 0; 
-      fill: currentColor; 
+    .sidebar-footer:hover { color: var(--ink); background: var(--rule); }
+
+    /* Icon size, now the only content in the button */
+    .sidebar-footer svg {
+      width: 20px !important;
+      height: 20px !important;
+      flex-shrink: 0;
+      fill: currentColor;
     }
 
   /* ── Scrollbar Edge TOC ── */
