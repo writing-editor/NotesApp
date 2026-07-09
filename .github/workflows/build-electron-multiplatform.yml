@@ -110,18 +110,30 @@ jobs:
       # Multi-platform Python icon generation block
       - name: Ensure app icon set exists (Linux/Mac)
         if: matrix.os != 'windows-latest'
+        # Both `pip install pillow` and `python3 -m pip install pillow`
+        # depend on the runner's system Python not being "externally
+        # managed" (PEP 668). ubuntu-latest's system python3 tolerates
+        # --break-system-packages; macos-latest's Homebrew python3 is
+        # externally-managed too but can reject even that flag depending on
+        # the image, which is why this step only fails on Mac. A venv sits
+        # outside that restriction entirely on every OS, so it's used here
+        # instead of relying on either flag to work.
         run: |
           if [ ! -f electron/build-resources/icon.png ] || [ -z "$(ls -A electron/build-resources/icons 2>/dev/null)" ]; then
-            pip install --break-system-packages --quiet pillow || pip install --quiet pillow
-            python3 electron/build-resources/generate-icons.py
+            python3 -m venv /tmp/icon-venv
+            /tmp/icon-venv/bin/pip install --quiet pillow
+            /tmp/icon-venv/bin/python3 electron/build-resources/generate-icons.py
           fi
 
       - name: Ensure app icon set exists (Windows)
         if: matrix.os == 'windows-latest'
         shell: powershell
+        # Same fix as the Linux/Mac step: use `python -m pip` so pillow
+        # installs into the exact interpreter that runs the script, rather
+        # than trusting a bare `pip` to resolve to the same one `python` does.
         run: |
           if (!(Test-Path electron/build-resources/icon.png) -or !(Get-ChildItem electron/build-resources/icons -ErrorAction SilentlyContinue)) {
-            pip install --quiet pillow
+            python -m pip install --quiet pillow
             python electron/build-resources/generate-icons.py
           }
 
