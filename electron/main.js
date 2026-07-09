@@ -29,6 +29,72 @@ const aiKeystore = require('./ai-keystore');
 // icons in the dock/dash instead of one. Set before app.whenReady().
 app.setName('manuscript');
 
+// ── Stale singleton-lock recovery ───────────────────────────────────────
+// Electron's SingletonLock file records the PID of whichever process is
+// holding it. If that process died without cleaning up (a crash, or —
+// concretely — `dpkg -i` replacing/killing the running binary mid-update,
+// which is exactly how this app got into that state before), the lock file
+// survives on disk with a PID that no longer belongs to anything. Every
+// future launch then loses the requestSingleInstanceLock() race below
+// against a "holder" that isn't actually running, and quits immediately —
+// no window, no dialog, indistinguishable from the app being broken.
+// This runs BEFORE requestSingleInstanceLock() so a genuinely-dead lock
+// never gets the chance to block a real launch; it only ever removes a
+// lock file whose recorded PID is confirmed not running, never one that is.
+function clearStaleSingletonLock() {
+  const lockPath = path.join(app.getPath('userData'), 'SingletonLock');
+  let recordedPid;
+  try {
+    const raw = fs.readFileSync(lockPath, 'utf8').trim();
+    // Electron writes this as "<pid><NUL><hostname>" on Linux/macOS.
+    recordedPid = parseInt(raw.split('\0')[0], 10);
+  } catch {
+    return; // no lock file, or unreadable — nothing to recover
+  }
+  if (!Number.isInteger(recordedPid)) return;
+  let isAlive = true;
+  try {
+    // Signal 0 sends nothing; it only checks whether the PID exists and is
+    // ours to signal. Throws ESRCH if the process is gone, EPERM if it
+    // exists but we lack permission (i.e. genuinely still alive) — only the
+    // ESRCH case means it's safe to remove the lock.
+    process.kill(recordedPid, 0);
+  } catch (e) {
+    isAlive = e.code !== 'ESRCH';
+  }
+  if (!isAlive) {
+    try {
+      fs.unlinkSync(lockPath);
+      console.log(`[desktop] removed stale SingletonLock (dead pid ${recordedPid})`);
+    } catch (e) {
+      console.error('[desktop] failed to remove stale SingletonLock:', e.message);
+    }
+  }
+}
+clearStaleSingletonLock();
+
+// Without this, a stray second process (e.g. the fork() bug this file used
+// to have, before ELECTRON_RUN_AS_NODE was set below, could leave an orphaned
+// child running) can leave a stale SingletonLock file in userData. Once that
+// happens, every future launch — including the previously-working install —
+// silently exits immediately on this check with no dialog, no window, no
+// visible error: exactly "clicking the icon does nothing." clearStaleSingletonLock()
+// above handles the case where that already happened; requesting the lock
+// here means (a) we detect a genuinely-live second instance ourselves instead
+// of Electron silently no-op'ing, and (b) a second launch attempt focuses the
+// existing window instead of doing nothing or spawning a conflicting instance.
+const gotSingleInstanceLock = app.requestSingleInstanceLock();
+if (!gotSingleInstanceLock) {
+  app.quit();
+} else {
+  app.on('second-instance', () => {
+    if (mainWindow) {
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      mainWindow.focus();
+    }
+  });
+}
+
 // ── Paths ────────────────────────────────────────────────────────────────
 // In development we run from the repo checkout: electron/ sits next to
 // AppCode/ and book/. When packaged by electron-builder, AppCode is copied
@@ -186,6 +252,20 @@ async function startServer(vaultPath) {
     env: {
       ...process.env,
       PORT: String(serverPort),
+      // Critical for the PACKAGED app: child_process.fork() spawns using
+      // Electron's own binary as the "node" executable (there's no separate
+      // Node runtime bundled — Electron's binary *is* what fork() uses).
+      // Without this flag, that binary launches in normal Electron-app mode
+      // instead of plain Node mode, so server.js never actually runs as a
+      // server — the fork either fails to boot it as JS at all, or attempts
+      // to start a second Electron/Chromium instance depending on version,
+      // which is why waitForServer() times out and the app appears to do
+      // nothing when the icon is clicked. This has no effect (and isn't
+      // needed) in dev, because `npm start` in AppCode already runs server.js
+      // under a real system Node — the packaged app is the only place this
+      // was ever missing, which is why the bug only showed up after
+      // packaging/installing rather than in local testing.
+      ELECTRON_RUN_AS_NODE: '1',
     },
     // Keep the server's console output visible in dev; pipe in production
     // so it lands in Electron's logs instead of an invisible console.
