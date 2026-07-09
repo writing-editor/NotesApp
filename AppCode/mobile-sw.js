@@ -30,19 +30,61 @@ const BOOK_PREFIX = 'book/';
 // the literal bytes, not the escaped form.
 
 // ── Service Worker asset caching ────────────────────────────────────────
-const CACHE_NAME = 'manuscript-mobile-v1';
+// CACHE_NAME must be bumped (v1 -> v2 -> v3...) any time client.js,
+// index.html, styles.css, or mn-editor.bundle.js changes. Caches are keyed
+// by this name, not by file content — as long as the name stays the same,
+// caches.match() below keeps returning whatever was cached under that name
+// the very first time this service worker ever ran on a given device, no
+// matter what's since been pushed to the server. This was stuck at 'v1'
+// since the file was created, which is why fixes to client.js (e.g. the
+// note-save scroll-position fix) never reached anyone who'd already
+// installed the app — their browser was still serving a client.js cached
+// long before that fix existed, and nothing ever told it to stop.
+const CACHE_VERSION = 'v2';
+const CACHE_NAME = `manuscript-mobile-${CACHE_VERSION}`;
 const STATIC_ASSETS = ['/', '/index.html', '/styles.css', '/client.js', '/mn-editor.bundle.js'];
 
 self.addEventListener('install', (e) => {
   self.skipWaiting();
   e.waitUntil(caches.open(CACHE_NAME).then((c) => c.addAll(STATIC_ASSETS)));
 });
-self.addEventListener('activate', (e) => self.clients.claim());
+self.addEventListener('activate', (e) => {
+  // Delete every cache NOT matching the current CACHE_NAME. Without this,
+  // bumping CACHE_VERSION above only ever adds a new cache alongside the
+  // old one — it doesn't remove it — so this step is what actually makes a
+  // version bump take effect instead of just accumulating caches forever.
+  e.waitUntil(
+    caches.keys().then((keys) =>
+      Promise.all(keys.filter((k) => k !== CACHE_NAME).map((k) => caches.delete(k)))
+    ).then(() => self.clients.claim())
+  );
+});
 
 self.addEventListener('fetch', (event) => {
   const url = new URL(event.request.url);
   if (url.pathname.startsWith('/api/')) {
     event.respondWith(handleApiRequest(event.request, url));
+    return;
+  }
+  if (STATIC_ASSETS.includes(url.pathname) || url.pathname === '/') {
+    // Stale-while-revalidate for the app shell: serve the cached copy
+    // immediately (so the app still opens instantly / offline), but always
+    // also fetch the network copy in the background and overwrite the
+    // cache with it. Without this, even with CACHE_VERSION bumped once now,
+    // the exact same problem returns the next time a file changes and
+    // someone forgets to bump the version again — this makes that bump
+    // unnecessary going forward for routine asset updates.
+    event.respondWith(
+      caches.match(event.request).then((cached) => {
+        const network = fetch(event.request).then((res) => {
+          if (res && res.ok) {
+            caches.open(CACHE_NAME).then((c) => c.put(event.request, res.clone()));
+          }
+          return res;
+        }).catch(() => cached);
+        return cached || network;
+      })
+    );
     return;
   }
   event.respondWith(
