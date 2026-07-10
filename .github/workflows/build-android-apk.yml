@@ -87,6 +87,21 @@ jobs:
         working-directory: mobile
         run: npm run sync-files
 
+      # Substitutes the __CACHE_VERSION__ placeholder in mobile-sw.js's
+      # bundled output (mobile/www/sw.js, produced by the sync-files step
+      # above) with this run's number — the exact same value used for
+      # versionCode/versionName in the step below. This is what makes the
+      # on-device asset cache invalidate on every build automatically;
+      # see the CACHE_VERSION comment in AppCode/mobile-sw.js for why that
+      # matters. Must run after sync-files (which produces www/sw.js) and
+      # before `cap sync android` (which copies www/ into the Android
+      # project) — the substitution needs to happen exactly once, on the
+      # bundled file that actually ships, not on the AppCode source or a
+      # copy Capacitor has already taken.
+      - name: Inject cache version into service worker
+        working-directory: mobile
+        run: sed -i "s/__CACHE_VERSION__/${{ github.run_number }}/" www/sw.js
+
       - uses: actions/setup-java@v5
         with:
           distribution: 'temurin'

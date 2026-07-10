@@ -30,17 +30,27 @@ const BOOK_PREFIX = 'book/';
 // the literal bytes, not the escaped form.
 
 // ── Service Worker asset caching ────────────────────────────────────────
-// CACHE_NAME must be bumped (v1 -> v2 -> v3...) any time client.js,
-// index.html, styles.css, or mn-editor.bundle.js changes. Caches are keyed
-// by this name, not by file content — as long as the name stays the same,
-// caches.match() below keeps returning whatever was cached under that name
-// the very first time this service worker ever ran on a given device, no
-// matter what's since been pushed to the server. This was stuck at 'v1'
-// since the file was created, which is why fixes to client.js (e.g. the
-// note-save scroll-position fix) never reached anyone who'd already
-// installed the app — their browser was still serving a client.js cached
-// long before that fix existed, and nothing ever told it to stop.
-const CACHE_VERSION = 'v2';
+// CACHE_NAME must change any time client.js, index.html, styles.css, or
+// mn-editor.bundle.js changes. Caches are keyed by this name, not by file
+// content — as long as the name stays the same, caches.match() below keeps
+// returning whatever was cached under that name the very first time this
+// service worker ever ran on a given device, no matter what's since been
+// pushed to the server. This was hand-bumped ('v1' -> 'v2' -> 'v3') for a
+// while, which is exactly as reliable as it sounds — 'v1' sat unbumped
+// from the file's creation until it visibly broke, since a build only
+// picks up a bump if a person remembers to type one first.
+//
+// __CACHE_VERSION__ is substituted by the CI build (see
+// .github/workflows/build-android-apk.yml's "Inject cache version" step)
+// with that run's github.run_number — the same value already used for
+// versionCode/versionName a few steps later in that workflow, so this
+// changes on literally every build with no manual step, the same way
+// versionCode already does. If this placeholder is still here (i.e.
+// mobile-sw.js is being run/served without going through that build
+// step — e.g. a local dev server), it falls back to a fixed dev string;
+// that's fine for local iteration, where you're testing against your own
+// running server and not relying on a stale on-device cache anyway.
+const CACHE_VERSION = '__CACHE_VERSION__'.startsWith('__') ? 'dev' : '__CACHE_VERSION__';
 const CACHE_NAME = `manuscript-mobile-${CACHE_VERSION}`;
 const STATIC_ASSETS = ['/', '/index.html', '/styles.css', '/client.js', '/mn-editor.bundle.js'];
 

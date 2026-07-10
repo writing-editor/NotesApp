@@ -217,9 +217,46 @@
 <script src="/mn-ai.bundle.js"></script>
 <script src="/client.js"></script>
 <script>
-  // Register service worker for offline support
+  // Register service worker for offline support.
+  //
+  // Bug: after an app update, the running page kept behaving as if nothing
+  // had changed until the app was uninstalled and reinstalled. The new
+  // mobile-sw.js *does* activate correctly in the background (self.skip
+  // Waiting() + clients.claim() in mobile-sw.js see to that) — but nothing
+  // here ever told the already-open page to do anything once that
+  // happened. A Service Worker taking over doesn't retroactively change
+  // already-loaded JS/DOM in a page that's been running since before it
+  // activated; only a fresh navigation/reload picks up whatever the new
+  // worker now serves. A real browser tab gets that reload naturally
+  // (closing/reopening a tab is a fresh navigation) but a single
+  // long-lived Capacitor WebView backgrounded and resumed is often the
+  // *same* page instance the whole time, so it never got one.
+  //
+  // Fix, in two parts:
+  //  1. `controllerchange` fires exactly once, right when a newly-activated
+  //     worker starts controlling this page — reload right then so the
+  //     fresh sw.js/client.js/styles.css actually take effect immediately
+  //     instead of silently waiting for the next cold start.
+  //  2. `registration.update()` on resume (paired with the existing
+  //     visibilitychange listener's git-pull check in client.js) makes the
+  //     browser re-fetch sw.js and compare it byte-for-byte against what's
+  //     currently registered, which is what lets a new worker be *found*
+  //     at all — without an explicit update() call, some WebViews only
+  //     check on their own schedule (roughly once every 24h), so an app
+  //     resumed sooner than that could go a long time without ever
+  //     noticing a new worker exists to activate in the first place.
   if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register('/sw.js').catch(() => {});
+    let reloadedForUpdate = false;
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      if (reloadedForUpdate) return; // guard against a stray double-fire
+      reloadedForUpdate = true;
+      window.location.reload();
+    });
+    navigator.serviceWorker.register('/sw.js').then(reg => {
+      document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'visible') reg.update().catch(() => {});
+      });
+    }).catch(() => {});
   }
 </script>
 </body>
