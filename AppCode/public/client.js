@@ -513,7 +513,28 @@ function remountAfterNoteMutation() {
   const scrollTop = main ? main.scrollTop : 0;
   const text = liveEditor.getDoc();
   mountLiveEditor(text, editingPath);
-  if (main) main.scrollTop = scrollTop;
+  if (!main) return;
+  main.scrollTop = scrollTop;
+  // Mobile-only follow-up: saveNote() calls this while the on-screen
+  // keyboard is still open (the sheet's textarea hasn't been blurred yet).
+  // Android's keyboard-dismiss animation triggers an asynchronous viewport
+  // resize *after* this function already returns, and that resize itself
+  // resets #main's scroll — silently overriding the restore above a moment
+  // later. That's why this fix alone didn't hold on the Android app even
+  // though the exact same code path is correct and unchanged on desktop,
+  // where there's no on-screen keyboard to close. visualViewport's resize
+  // event fires once that keyboard-close settles, so re-applying scrollTop
+  // there catches the case desktop never has to deal with. The plain
+  // setTimeout fallback covers browsers/webviews without visualViewport.
+  if (window.visualViewport) {
+    const reapply = () => { main.scrollTop = scrollTop; };
+    window.visualViewport.addEventListener('resize', reapply, { once: true });
+    // Safety timeout in case the keyboard was already closed and no resize
+    // event fires at all — don't leave the listener attached forever.
+    setTimeout(() => window.visualViewport.removeEventListener('resize', reapply), 600);
+  } else {
+    setTimeout(() => { main.scrollTop = scrollTop; }, 300);
+  }
 }
 
 // Flushes any pending debounced save immediately — used before navigating
@@ -970,6 +991,13 @@ sheetInput.addEventListener('keydown', e => {
 });
 
 function closeSheet() {
+  // Blur first: on mobile this starts the on-screen keyboard's dismiss
+  // animation immediately, before the CM6 remount below tears down and
+  // rebuilds the editor DOM. Without this, the input can still hold focus
+  // into the remount, so the keyboard only starts closing afterward — see
+  // the comment in remountAfterNoteMutation() for why that's the actual
+  // source of the mobile-only scroll-jump.
+  if (sheetInput) sheetInput.blur();
   noteSheet.classList.remove('open');
   selTooltip.classList.remove('visible');
   pendingPos = null;
@@ -1001,8 +1029,12 @@ async function saveNote() {
 
   try {
     liveEditor.insertNoteAt(pendingPos.charPos, text, selectedNoteType || null);
-    remountAfterNoteMutation();
+    // closeSheet() blurs the input BEFORE remountAfterNoteMutation() tears
+    // down/rebuilds the CM6 view — see the comments in both functions.
+    // Doing this first (not after, as before) starts the mobile keyboard's
+    // close animation ahead of the remount instead of racing it.
     closeSheet();
+    remountAfterNoteMutation();
   } finally {
     btn.disabled = false;
     btn.style.opacity = '1';
