@@ -929,6 +929,15 @@
 
       .sidebar-overlay.open { display: block; }
 
+      /* Agent (#agent-action) is a desktop/Electron feature — see its
+         mount comment in client.js. It has no non-clickable/disabled
+         styling of its own, it's just always in the DOM; on mobile it
+         was showing up as a dead button with no way to do anything with
+         it, since nothing on a phone can use it. Hide it here rather
+         than in client.js so it simply isn't part of the layout at all
+         at this width, instead of being present-but-inert. */
+      #agent-action { display: none; }
+
       .topbar { display: flex; }
 
       .page-wrap {
