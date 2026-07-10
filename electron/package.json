@@ -25,8 +25,7 @@
       "buildResources": "build-resources"
     },
     "files": [
-      "main.js",
-      "preload.js",
+      "*.js",
       "package.json"
     ],
     "extraResources": [
