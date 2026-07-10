@@ -482,59 +482,23 @@ function mountLiveEditor(rawText, path) {
   });
 }
 
-// Workaround for the "stale inline note-superscript number" bug (see
-// BUG_HANDOFF_note_superscript_refresh.md): after any edit that shifts the
-// sequential id of notes below it (insert/delete/retype), CM6's incremental
-// redraw of the `sup.mn-marker` widgets below the edit point doesn't
-// reliably refresh every one of them. Two rounds of trying to fix CM6's
-// incremental decoration redraw itself did not resolve it even after
-// confirming rebuilds were live — see the handoff doc for the full
-// investigation. Neither of us has a browser to inspect the live DOM and
-// confirm *why* CM6's diffing misses these ranges, so rather than guess a
-// third time, this forces the one thing that's guaranteed to be correct:
-// fully tearing down and recreating the CM6 view from the post-edit
-// document text after any note mutation. It's heavier than an incremental
-// fix (briefly recreates the view, so that one action isn't undo-able with
-// Ctrl/Cmd+Z) but it can't leave a stale superscript behind, since every
-// widget is freshly built from the current text on remount. Scroll
-// position is preserved. Call this after insertNoteAt/retypeNoteById/
-// removeNoteById specifically — not after ordinary typing, which remains
-// fully incremental and unaffected.
+// Previously this force-remounted the whole CM6 view after any note
+// mutation (insert/retype/remove), to work around stale `sup.mn-marker`
+// numbers below the edit point — see noteWidgets.js's noteMarkerWidgets
+// StateField comment for the full history. That workaround is no longer
+// needed: the marker's number is now baked into the widget's own
+// textContent from findNoteMarkers()'s id (see NoteAnchorWidget in
+// noteWidgets.js), and decorations are recomputed from the StateField on
+// every relevant transaction, so a normal incremental CM6 redraw is
+// already guaranteed correct — there's nothing left for a remount to fix.
+// Tearing down/rebuilding the whole view was also the cause of a visible
+// "content jerks up slightly" jump on save: even with scroll position
+// restored afterward, the rebuild briefly lays the doc out from scratch
+// (at scroll 0) before the restore runs, and that reflow was perceptible.
+// Kept as a no-op passthrough (rather than deleting every call site) in
+// case a future change reintroduces something that needs a hard refresh.
 function remountAfterNoteMutation() {
-  if (!liveEditor || !editingPath) return;
-  // The actual scrollable element is #main (see .main's `overflow-y: auto`
-  // in styles.css) — #main-text is just a non-scrolling child article, so
-  // reading/writing scrollTop on it was always a no-op. That's why saving a
-  // note reset the view to the top: mountLiveEditor() tears down and
-  // rebuilds the CM6 view (see the comment above), which drops the browser's
-  // native scroll position, and the old restore below never actually put it
-  // back because it was targeting the wrong element.
-  const main = document.getElementById('main');
-  const scrollTop = main ? main.scrollTop : 0;
-  const text = liveEditor.getDoc();
-  mountLiveEditor(text, editingPath);
-  if (!main) return;
-  main.scrollTop = scrollTop;
-  // Mobile-only follow-up: saveNote() calls this while the on-screen
-  // keyboard is still open (the sheet's textarea hasn't been blurred yet).
-  // Android's keyboard-dismiss animation triggers an asynchronous viewport
-  // resize *after* this function already returns, and that resize itself
-  // resets #main's scroll — silently overriding the restore above a moment
-  // later. That's why this fix alone didn't hold on the Android app even
-  // though the exact same code path is correct and unchanged on desktop,
-  // where there's no on-screen keyboard to close. visualViewport's resize
-  // event fires once that keyboard-close settles, so re-applying scrollTop
-  // there catches the case desktop never has to deal with. The plain
-  // setTimeout fallback covers browsers/webviews without visualViewport.
-  if (window.visualViewport) {
-    const reapply = () => { main.scrollTop = scrollTop; };
-    window.visualViewport.addEventListener('resize', reapply, { once: true });
-    // Safety timeout in case the keyboard was already closed and no resize
-    // event fires at all — don't leave the listener attached forever.
-    setTimeout(() => window.visualViewport.removeEventListener('resize', reapply), 600);
-  } else {
-    setTimeout(() => { main.scrollTop = scrollTop; }, 300);
-  }
+  // Intentionally empty — see comment above.
 }
 
 // Flushes any pending debounced save immediately — used before navigating
@@ -1800,7 +1764,25 @@ window.addEventListener('mn:notes-mutated', () => {
         });
         const data = await res.json();
         if (data.ok) {
-          if (currentPath) await silentRefresh({ force: true });
+          // Bug fix: this runs automatically on every resume-from-background
+          // (e.g. the user locks the screen mid-note, then unlocks it a
+          // moment later) via the visibilitychange listener below, not just
+          // when the person explicitly taps "Pull" in Settings. force:true
+          // here used to unconditionally call silentRefresh(), which
+          // replaces the live editor's document outright — discarding
+          // whatever the person had typed and not yet saved, even though
+          // nothing about the pull itself made their unsaved text wrong.
+          // A real conflict (the pulled file actually changed) is rare for
+          // a solo-device vault and is exactly what /api/git/pull's own
+          // 'conflict' reason already exists to report — this path should
+          // only ever refresh when there's nothing local at risk. So:
+          // flush any pending debounced save first (so "unsaved" briefly
+          // becomes "saved", the normal case), and only force-refresh the
+          // editor if there's truly no pending/in-flight edit left to lose.
+          if (currentPath) {
+            await flushPendingSave();
+            if (!saveTimer) await silentRefresh({ force: true });
+          }
           if (syncPendingBadge) syncPendingBadge.style.display = 'none';
           await refreshStatus();
         } else if (data.reason === 'network' && statusText.textContent === initialStatusText) {

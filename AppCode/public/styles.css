@@ -339,16 +339,18 @@
     /* ── Margin note markers ── */
     .mn-anchor { position: relative; }
 
-    /* Number markers by DOM order via a CSS counter rather than trusting
-       each widget's baked-in textContent to always be freshly redrawn.
-       CodeMirror 6 doesn't reliably repaint every .mn-marker below an
-       edit the instant note count changes (a line only redraws once the
-       user interacts with it) — but a CSS counter is recomputed by the
-       browser on every layout pass from DOM order alone, so the *visible*
-       number is always correct even if the widget's own redraw lags. */
-    .main-text { counter-reset: mn-counter; }
-    .mn-anchor { counter-increment: mn-counter; }
-
+    /* Numbering used to come from a CSS counter recomputed by DOM order
+       (counter-reset/counter-increment below), on the theory that it'd
+       always be correct even if CM6 was slow to redraw a widget after an
+       edit. That assumption was wrong in a different way than intended:
+       CM6 only mounts .mn-anchor DOM nodes for lines near the viewport,
+       so off-screen notes are simply absent from the counter's DOM walk.
+       Two notes far enough apart to never both be rendered at once each
+       ended up "the first counter-incremented .mn-anchor the browser
+       sees" and both showed 1. Numbers are now baked into each widget's
+       textContent directly from the note's real id (see
+       editor-src/noteWidgets.js's NoteAnchorWidget), which is always
+       correct regardless of what's currently mounted. */
     .mn-marker {
       font-family: var(--font-ui);
       font-size: 0.82rem;
@@ -360,8 +362,6 @@
       padding: 0 1px;
       transition: color 0.15s;
     }
-
-    .mn-marker::before { content: counter(mn-counter); }
 
     .mn-marker:hover, .mn-marker.active { color: var(--accent-dim); }
 

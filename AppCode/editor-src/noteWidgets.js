@@ -37,13 +37,19 @@ class NoteAnchorWidget extends WidgetType {
     span.dataset.noteId = String(this.id);
     const sup = document.createElement('sup');
     sup.className = 'mn-marker';
-    // No textContent here — the visible number comes from a CSS counter
-    // (see styles.css's `.mn-marker::before`), which recomputes purely
-    // from DOM order on every layout pass. That's deliberate: CM6 doesn't
-    // reliably redraw every marker below an edit the instant note count
-    // changes, so a number baked in here via JS can go stale until the
-    // user interacts with that specific line. `data-note-id` (above) still
-    // carries this widget's real id for margin-chip binding/lookup.
+    // The number is baked in directly from findNoteMarkers()'s global,
+    // order-of-appearance id (this.id) rather than a CSS counter. A CSS
+    // counter only recomputes over DOM nodes that actually exist, but CM6
+    // only mounts widgets for lines near the viewport — any .mn-anchor
+    // that isn't currently rendered is simply absent from the DOM, so
+    // counter-increment silently skips it. That let two notes far enough
+    // apart to never both be on-screen at once each become "the first
+    // .mn-anchor counter sees" and both render as 1. Since this StateField
+    // recomputes buildDecorations() from the full document on every
+    // relevant transaction (see the comment on noteMarkerWidgets below),
+    // this.id is always current — no staleness risk the old CSS-counter
+    // approach was written to avoid.
+    sup.textContent = String(this.id);
     span.appendChild(sup);
     return span;
   }
