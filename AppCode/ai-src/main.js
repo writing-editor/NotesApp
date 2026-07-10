@@ -14,10 +14,18 @@
 // identify which manifest entry is the one actually mounted live.
 
 import { buildSettingsPanel } from './settingsPanel.js';
-import { migrateLegacySystemPrompt } from './storage.js';
+import { migrateLegacySystemPrompt, refreshAgentConfigCache } from './storage.js';
 
 function mount({ triggerEl, getEditor, getCurrentPath } = {}) {
   const panel = buildSettingsPanel({ triggerEl, getEditor, getCurrentPath });
+  // Fire-and-forget: loads the per-vault agent config (provider, model,
+  // agent profile, scope, mode) into storage.js's in-memory cache before
+  // the settings panel is ever opened — see storage.js's
+  // refreshAgentConfigCache() for why this replaced localStorage as the
+  // source of truth. Doesn't block mount(); the panel's own open() falls
+  // back to defaults if it's opened before this resolves, same tolerance
+  // migrateLegacySystemPrompt() below already has.
+  refreshAgentConfigCache();
   // Fire-and-forget: one-time upgrade of an old flat systemPrompt string
   // into a vault-level agents/Custom.md file. Runs here, once
   // per mount, rather than inside settingsPanel.open()'s hot path — it's
@@ -27,6 +35,11 @@ function mount({ triggerEl, getEditor, getCurrentPath } = {}) {
   return {
     openSettings: panel.open,
     closeSettings: panel.close,
+    // Exposed so client.js can re-load agent config after a vault switch
+    // (POST /api/vault) — the old config lived in localStorage, which
+    // didn't care about vault switches at all; now it does, since config is
+    // per-vault.
+    refreshAgentConfig: refreshAgentConfigCache,
   };
 }
 

@@ -132,7 +132,12 @@ export async function runAgent({ getEditor, getCurrentPath, onAfterMutation, onS
     };
   }
 
-  const apiKey = provider === 'ollama' ? '' : await getProviderKey(provider);
+  const apiKey = provider === 'ollama'
+    ? ''
+    // Uses whichever slot ("A"/"B") is currently active for this provider —
+    // set manually in the settings panel, no automatic fallback. See
+    // storage.js's "Per-provider key slots" comment for why.
+    : await getProviderKey(provider, config.keySlots?.[provider]?.active || 'A');
   if (provider !== 'ollama' && !apiKey) {
     notify('error');
     return {

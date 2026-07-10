@@ -24,36 +24,56 @@
 const isNative = () => !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
 const hasElectronKeyBridge = () => !!(window.manuscriptDesktop && window.manuscriptDesktop.getAiKey);
 
-export async function getProviderKey(provider) {
+// ── Per-provider key slots ──────────────────────────────────────────────
+//
+// Two saved keys per provider ("A"/"B" internally, shown as user-editable
+// labels — e.g. "Work"/"Personal") so switching between two accounts on the
+// same provider doesn't mean retyping/repasting a key every time. Which
+// slot is *active* is picked manually in the settings panel — no automatic
+// fallback on error; a bad model name or a transient outage shouldn't be
+// mistaken for "this key is bad" and silently swap it out from under a run.
+//
+// Storage placement per slot mirrors the single-key logic exactly (native
+// SecureStoragePlugin / Electron safeStorage+keyring / localStorage), just
+// keyed by `ai-key-${provider}-${slot}` instead of `ai-key-${provider}`.
+// Slot *labels* and which slot is active are not secrets, so they live in
+// the per-vault agent config (storage.js's DEFAULT_CONFIG.keySlots below),
+// same tier as model/agent/scope/mode.
+
+export const KEY_SLOTS = ['A', 'B'];
+
+export async function getProviderKey(provider, slot = 'A') {
+  const storageKey = `ai-key-${provider}-${slot}`;
   try {
     if (isNative() && window.Capacitor?.Plugins?.SecureStoragePlugin) {
-      const { value } = await window.Capacitor.Plugins.SecureStoragePlugin.get({ key: `ai-key-${provider}` });
+      const { value } = await window.Capacitor.Plugins.SecureStoragePlugin.get({ key: storageKey });
       return value || '';
     }
     if (hasElectronKeyBridge()) {
-      return (await window.manuscriptDesktop.getAiKey(provider)) || '';
+      return (await window.manuscriptDesktop.getAiKey(`${provider}-${slot}`)) || '';
     }
-    return window.localStorage.getItem(`ai-key-${provider}`) || '';
+    return window.localStorage.getItem(storageKey) || '';
   } catch { /* not set yet or plugin/storage error */ }
   return '';
 }
 
-export async function setProviderKey(provider, key) {
+export async function setProviderKey(provider, key, slot = 'A') {
+  const storageKey = `ai-key-${provider}-${slot}`;
   try {
     if (isNative() && window.Capacitor?.Plugins?.SecureStoragePlugin) {
-      await window.Capacitor.Plugins.SecureStoragePlugin.set({ key: `ai-key-${provider}`, value: key });
+      await window.Capacitor.Plugins.SecureStoragePlugin.set({ key: storageKey, value: key });
       return;
     }
     if (hasElectronKeyBridge()) {
-      const result = await window.manuscriptDesktop.setAiKey(provider, key);
+      const result = await window.manuscriptDesktop.setAiKey(`${provider}-${slot}`, key);
       if (result && result.ok) return;
       // OS keyring unavailable — fall back to localStorage rather than
       // silently losing the key, same as the git PAT's fallback.
       console.warn('[ai-settings] OS keyring unavailable, falling back to localStorage:', result && result.reason);
-      window.localStorage.setItem(`ai-key-${provider}`, key);
+      window.localStorage.setItem(storageKey, key);
       return;
     }
-    window.localStorage.setItem(`ai-key-${provider}`, key);
+    window.localStorage.setItem(storageKey, key);
   } catch (e) {
     console.error('[ai-settings] failed to store key:', e.message);
   }
@@ -77,9 +97,26 @@ export async function keyStorageDescription() {
 }
 
 // ── Non-secret agent config (Ollama URL, system prompt, scope, mode) ──────
-// Plain localStorage everywhere, same tier as the Ollama base URL was
-// always meant to be: not encrypted, not a secret. No
-// provider/platform branching needed.
+//
+// Was plain localStorage keyed by CONFIG_KEY below. Moved to a per-vault
+// file (VAULT/_agent-config.json, served through /api/agent-config —
+// see server.js, same shape as the existing /api/progress) because
+// localStorage on desktop is scoped per-origin, and origin = host:port for
+// this app's local Electron server. Historically the server picked a fresh
+// random port on every launch (fixed now — see electron/main.js's
+// resolveServerPort(), which pins and reuses the last port), but relying on
+// port-stability alone means a lingering old server process, a port
+// collision, or a future regression there would silently reset every
+// setting except the API key (which never went through localStorage at all
+// — see the 3-tier key storage above). Storing this in the vault instead
+// makes it immune to that whole class of bug, and as a side effect makes
+// agent settings per-vault: a fiction manuscript and a technical vault can
+// reasonably want different providers/agent profiles anyway.
+//
+// localStorage is kept as a *fallback only*, for the brief window before any
+// vault has been selected (fresh install, no VAULT yet) — see
+// getAgentConfig()/setAgentConfig() below for exactly when each tier is
+// used. Once a vault exists, the vault file is the sole source of truth.
 
 const CONFIG_KEY = 'ai-agent-config';
 
@@ -94,7 +131,30 @@ const DEFAULT_CONFIG = {
     gemini: '',
     ollama: '',
   },
+  // MRU history of models typed per provider, most-recent-first, deduped,
+  // capped at MRU_LIMIT — separate from `models` above (which is just "the
+  // current value"), so the model field can suggest past entries via a
+  // <datalist> without needing a second round-trip anywhere.
+  modelHistory: {
+    claude: [],
+    openai: [],
+    gemini: [],
+    ollama: [],
+  },
   ollamaUrl: '',
+  ollamaUrlHistory: [],
+  // Two named key slots per provider ("A"/"B") — see the "Per-provider key
+  // slots" block above. `label` is what the settings panel shows instead of
+  // the raw slot letter (e.g. "Work"); `active` is which slot's key
+  // getProviderKey()/getAgentConfig() callers should use right now. Neither
+  // field is a secret — the keys themselves live in the 3-tier storage
+  // above, addressed by `${provider}-${slot}`; this is just bookkeeping
+  // about which slot is which and which one is "on".
+  keySlots: {
+    claude: { active: 'A', labels: { A: '', B: '' } },
+    openai: { active: 'A', labels: { A: '', B: '' } },
+    gemini: { active: 'A', labels: { A: '', B: '' } },
+  },
   // Agent profile — a reference to a file's `key` (see
   // server.js's /api/agents), not the prompt text itself. Replaces the old
   // flat `systemPrompt` string; empty means "nothing selected yet."
@@ -102,6 +162,51 @@ const DEFAULT_CONFIG = {
   scope: 'chapter',
   mode: 'read-write',
 };
+
+const MRU_LIMIT = 6;
+
+// Pushes `value` to the front of `list`, dedupes (case-sensitive — a model
+// name or URL's casing matters), drops empties, and caps at MRU_LIMIT.
+// Pure — returns a new array, doesn't mutate `list`, so callers can pass
+// configCache's own array straight in without aliasing surprises.
+function pushMru(list, value) {
+  const trimmed = (value || '').trim();
+  if (!trimmed) return Array.isArray(list) ? list : [];
+  const rest = (Array.isArray(list) ? list : []).filter(v => v !== trimmed);
+  return [trimmed, ...rest].slice(0, MRU_LIMIT);
+}
+
+// In-memory cache so callers that expect getAgentConfig()-style synchronous
+// reads (there are several in settingsPanel.js) get the last-fetched value
+// immediately, while a fetch to the vault file happens in the background
+// via refreshAgentConfigCache(). Seeded with the defaults so nothing is ever
+// undefined before the first refresh completes.
+let configCache = structuredCloneConfig(DEFAULT_CONFIG);
+let configCacheLoaded = false;
+
+async function fetchVaultConfig() {
+  try {
+    const res = await fetch('/api/agent-config');
+    if (!res.ok) return null; // e.g. 400 "no vault selected"
+    const data = await res.json();
+    return data && Object.keys(data).length > 0 ? data : null;
+  } catch {
+    return null; // server unreachable
+  }
+}
+
+async function writeVaultConfig(next) {
+  try {
+    const res = await fetch('/api/agent-config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(next),
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
 
 // One-time normalization from the old flat `model` field to the new
 // per-provider `models` map (migration for existing installs).
@@ -156,37 +261,153 @@ export async function migrateLegacySystemPrompt() {
   }
 }
 
-export function getAgentConfig() {
-  try {
-    const raw = window.localStorage.getItem(CONFIG_KEY);
-    if (!raw) return { ...DEFAULT_CONFIG, models: { ...DEFAULT_CONFIG.models } };
-    const parsed = migrateFlatModel(JSON.parse(raw));
-    const merged = {
-      ...DEFAULT_CONFIG,
-      ...parsed,
-      models: { ...DEFAULT_CONFIG.models, ...(parsed.models || {}) },
+function mergeWithDefaults(parsed) {
+  if (!parsed) return structuredCloneConfig(DEFAULT_CONFIG);
+  const migrated = migrateFlatModel(parsed);
+  const keySlotsDefaults = DEFAULT_CONFIG.keySlots;
+  const mergedKeySlots = {};
+  for (const provider of Object.keys(keySlotsDefaults)) {
+    const incoming = (migrated.keySlots || {})[provider] || {};
+    mergedKeySlots[provider] = {
+      active: incoming.active || keySlotsDefaults[provider].active,
+      labels: { ...keySlotsDefaults[provider].labels, ...(incoming.labels || {}) },
     };
-    return merged;
-  } catch {
-    return { ...DEFAULT_CONFIG, models: { ...DEFAULT_CONFIG.models } };
   }
+  return {
+    ...DEFAULT_CONFIG,
+    ...migrated,
+    models: { ...DEFAULT_CONFIG.models, ...(migrated.models || {}) },
+    modelHistory: { ...DEFAULT_CONFIG.modelHistory, ...(migrated.modelHistory || {}) },
+    ollamaUrlHistory: Array.isArray(migrated.ollamaUrlHistory) ? migrated.ollamaUrlHistory : DEFAULT_CONFIG.ollamaUrlHistory,
+    keySlots: mergedKeySlots,
+  };
 }
 
-export function setAgentConfig(partial) {
-  try {
-    const current = getAgentConfig();
-    // Shallow-merge everything except `models`, which merges one level
-    // deeper so saving under one provider doesn't clobber another
-    // provider's remembered model.
-    const next = {
-      ...current,
-      ...partial,
-      models: { ...current.models, ...(partial.models || {}) },
-    };
-    window.localStorage.setItem(CONFIG_KEY, JSON.stringify(next));
-    return next;
-  } catch (e) {
-    console.error('[ai-settings] failed to store agent config:', e.message);
-    return getAgentConfig();
+function structuredCloneConfig(cfg) {
+  return {
+    ...cfg,
+    models: { ...cfg.models },
+    modelHistory: { ...cfg.modelHistory, claude: [...cfg.modelHistory.claude], openai: [...cfg.modelHistory.openai], gemini: [...cfg.modelHistory.gemini], ollama: [...cfg.modelHistory.ollama] },
+    ollamaUrlHistory: [...cfg.ollamaUrlHistory],
+    keySlots: {
+      claude: { ...cfg.keySlots.claude, labels: { ...cfg.keySlots.claude.labels } },
+      openai: { ...cfg.keySlots.openai, labels: { ...cfg.keySlots.openai.labels } },
+      gemini: { ...cfg.keySlots.gemini, labels: { ...cfg.keySlots.gemini.labels } },
+    },
+  };
+}
+
+// Call once at mount time (before the settings panel is ever opened), same
+// slot as migrateLegacySystemPrompt() — populates configCache from the
+// vault file if one exists, falling back to plain defaults otherwise (fresh
+// install, or no vault selected yet). getAgentConfig() itself stays
+// synchronous (reads configCache only) so every existing call site in
+// settingsPanel.js keeps working unchanged; this is what fills the cache
+// before those calls happen.
+export async function refreshAgentConfigCache() {
+  const fromVault = await fetchVaultConfig();
+  if (fromVault) {
+    configCache = mergeWithDefaults(fromVault);
+    configCacheLoaded = true;
+    return configCache;
   }
+
+  configCache = mergeWithDefaults(null);
+  configCacheLoaded = true;
+  return configCache;
+}
+
+// Synchronous by design — every existing call site (settingsPanel.js's
+// open(), provider-change handler, save()) expects an immediate value.
+// Returns whatever's in configCache, which refreshAgentConfigCache() (called
+// at mount, and again after every vault switch) keeps current. Before the
+// very first refresh completes this is just DEFAULT_CONFIG, same as the old
+// "nothing in localStorage yet" case used to return.
+export function getAgentConfig() {
+  return configCache;
+}
+
+// True once refreshAgentConfigCache() has resolved at least once (from the
+// vault, localStorage, or plain defaults — any of those counts as "loaded").
+// settingsPanel.js's open() uses this to decide whether it can trust
+// getAgentConfig()'s synchronous value immediately or should await one more
+// refresh first — relevant right after a vault switch, where main.js kicks
+// off refreshAgentConfigCache() but the drawer could in principle be opened
+// before that promise settles.
+export function isAgentConfigLoaded() {
+  return configCacheLoaded;
+}
+
+export async function setAgentConfig(partial) {
+  // Shallow-merge everything except the nested maps, which merge one level
+  // deeper so saving under one provider (or one key slot) doesn't clobber
+  // another provider's/slot's remembered value.
+  const mergedKeySlots = { ...configCache.keySlots };
+  if (partial.keySlots) {
+    for (const provider of Object.keys(partial.keySlots)) {
+      mergedKeySlots[provider] = {
+        ...configCache.keySlots[provider],
+        ...partial.keySlots[provider],
+        labels: { ...configCache.keySlots[provider]?.labels, ...(partial.keySlots[provider].labels || {}) },
+      };
+    }
+  }
+  const next = {
+    ...configCache,
+    ...partial,
+    models: { ...configCache.models, ...(partial.models || {}) },
+    modelHistory: { ...configCache.modelHistory, ...(partial.modelHistory || {}) },
+    ollamaUrlHistory: partial.ollamaUrlHistory || configCache.ollamaUrlHistory,
+    keySlots: mergedKeySlots,
+  };
+  configCache = next; // update the cache immediately so a subsequent
+                       // getAgentConfig() (e.g. save()'s own re-read) sees
+                       // it even if the write below is still in flight.
+  const wrote = await writeVaultConfig(next);
+  if (!wrote) {
+    // No vault selected yet, or server unreachable — same situations
+    // migrateLegacySystemPrompt() already tolerates elsewhere in this file.
+    // Fall back to localStorage rather than losing the save outright; the
+    // next refreshAgentConfigCache() (e.g. after a vault is picked) will
+    // carry it forward into the vault file via the migration path above.
+    try {
+      window.localStorage.setItem(CONFIG_KEY, JSON.stringify(next));
+    } catch (e) {
+      console.error('[ai-settings] failed to store agent config:', e.message);
+    }
+  }
+  return next;
+}
+
+// Convenience used by settingsPanel.js's save(): folds "save this provider's
+// model" and "remember it in that provider's MRU history" into one call, so
+// the panel doesn't have to hand-build the modelHistory patch itself. Same
+// for the Ollama URL. Both are plain functions (not exported standalone
+// history-pushers) because the only sensible time to push into history is
+// "the moment it's saved" — there's no separate use case for pushing
+// without saving, or saving without remembering it for next time.
+export async function saveModelForProvider(provider, value) {
+  return setAgentConfig({
+    models: { [provider]: value },
+    modelHistory: { [provider]: pushMru(configCache.modelHistory[provider], value) },
+  });
+}
+
+export async function saveOllamaUrl(value) {
+  return setAgentConfig({
+    ollamaUrl: value,
+    ollamaUrlHistory: pushMru(configCache.ollamaUrlHistory, value),
+  });
+}
+
+// Sets which key slot ("A" or "B") is active for a provider — manual only,
+// no auto-fallback (see the "Per-provider key slots" comment up top for why).
+export async function setActiveKeySlot(provider, slot) {
+  return setAgentConfig({ keySlots: { [provider]: { active: slot } } });
+}
+
+// Renames a key slot's display label (e.g. "Work" / "Personal") without
+// touching the key itself or which slot is active.
+export async function setKeySlotLabel(provider, slot, label) {
+  return setAgentConfig({ keySlots: { [provider]: { labels: { [slot]: label } } } });
 }

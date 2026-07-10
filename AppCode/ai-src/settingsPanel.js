@@ -23,7 +23,11 @@
 // preview list + "Apply" action for read-only-mode runs; a per-kind error
 // message instead of one generic string; and an "Undo last run" action.
 
-import { getProviderKey, setProviderKey, keyStorageDescription, getAgentConfig, setAgentConfig } from './storage.js';
+import {
+  getProviderKey, setProviderKey, keyStorageDescription,
+  getAgentConfig, setAgentConfig, isAgentConfigLoaded, refreshAgentConfigCache,
+  saveModelForProvider, saveOllamaUrl, setActiveKeySlot, setKeySlotLabel, KEY_SLOTS,
+} from './storage.js';
 import { runAgent, cancelAgent, applyPreview, undoLastRun, canUndoLastRun } from './agentRunner.js';
 
 // Stage 4: maps agentRunner's status strings to the text shown in the
@@ -112,12 +116,39 @@ export function buildSettingsPanel({ triggerEl, getEditor, getCurrentPath } = {}
 
   const modelSection = el('div', { class: 'settings-section' }, [
     el('label', { text: 'Model' }),
-    el('input', { type: 'text', id: 'ai-model-input', placeholder: 'e.g. claude-sonnet-5' }),
+    el('input', { type: 'text', id: 'ai-model-input', placeholder: 'e.g. claude-sonnet-5', list: 'ai-model-history' }),
+    // Suggestions from this provider's own MRU history (see storage.js's
+    // modelHistory) — repopulated per-provider in refreshModelHistoryList()
+    // below, since Ollama's list of past models is unrelated to Claude's.
+    el('datalist', { id: 'ai-model-history' }),
   ]);
+
+  // Two named key slots per provider ("A"/"B", shown via user-editable
+  // labels) — see storage.js's "Per-provider key slots" comment. The active
+  // slot's radio drives which key the field below actually shows/saves;
+  // switching slots here does NOT autosave — same "click Save to commit"
+  // rule as every other field in this drawer, so a slot switch is easy to
+  // back out of by just not saving.
+  const keySlotToggle = el('div', { class: 'settings-row ai-key-slot-toggle', id: 'ai-key-slot-toggle' });
+  const keySlotInputs = {};
+  KEY_SLOTS.forEach(slot => {
+    const radioId = `ai-key-slot-${slot}`;
+    const radio = el('input', { type: 'radio', name: 'ai-key-slot', id: radioId, value: slot });
+    const labelInput = el('input', {
+      type: 'text',
+      class: 'ai-key-slot-label',
+      id: `ai-key-slot-label-${slot}`,
+      placeholder: slot === 'A' ? 'e.g. Work' : 'e.g. Personal',
+    });
+    keySlotInputs[slot] = { radio, labelInput };
+    keySlotToggle.appendChild(el('div', { class: 'ai-key-slot' }, [radio, labelInput]));
+  });
 
   const keySection = el('div', { class: 'settings-section', id: 'ai-key-section' }, [
     el('label', { text: 'API key' }),
+    keySlotToggle,
     el('input', { type: 'password', id: 'ai-key-input', placeholder: 'sk-...' }),
+    el('small', { text: 'Two saved keys per provider \u2014 pick which one is active, then Save. Switching here does not auto-fallback on errors; it only changes on your say-so.' }),
   ]);
 
   const keyNote = el('div', { class: 'settings-section', id: 'ai-key-note' }, [
@@ -136,7 +167,8 @@ export function buildSettingsPanel({ triggerEl, getEditor, getCurrentPath } = {}
     style: 'display:none;',
   }, [
     el('label', { text: 'Ollama base URL' }),
-    el('input', { type: 'text', id: 'ai-ollama-url-input', placeholder: 'http://localhost:11434' }),
+    el('input', { type: 'text', id: 'ai-ollama-url-input', placeholder: 'http://localhost:11434', list: 'ai-ollama-url-history' }),
+    el('datalist', { id: 'ai-ollama-url-history' }),
   ]);
 
   // ── Section 2: Agent behaviour ─────────────────────────────────────────
@@ -234,9 +266,11 @@ export function buildSettingsPanel({ triggerEl, getEditor, getCurrentPath } = {}
   );
 
   const modelInput      = modelSection.querySelector('#ai-model-input');
+  const modelHistoryList = modelSection.querySelector('#ai-model-history');
   const keyInput        = keySection.querySelector('#ai-key-input');
   const keyNoteText     = keyNote.querySelector('#ai-key-note-text');
   const ollamaUrlInput  = ollamaUrlSection.querySelector('#ai-ollama-url-input');
+  const ollamaUrlHistoryList = ollamaUrlSection.querySelector('#ai-ollama-url-history');
   const agentSelect     = promptSection.querySelector('#ai-agent-select');
   const agentPreview    = promptSection.querySelector('#ai-agent-preview');
   const scopeSelect     = scopeSection.querySelector('#ai-scope-select');
@@ -336,26 +370,83 @@ export function buildSettingsPanel({ triggerEl, getEditor, getCurrentPath } = {}
     ollamaUrlSection.style.display = isOllama ? '' : 'none';
   }
 
+  // Rebuilds a <datalist>'s <option> children from a plain string array —
+  // used for both the model MRU list (per-provider) and the Ollama URL MRU
+  // list. Cheap enough to just clear-and-rebuild rather than diffing.
+  function fillDatalist(datalistEl, values) {
+    datalistEl.innerHTML = '';
+    (values || []).forEach(v => datalistEl.appendChild(el('option', { value: v })));
+  }
+
+  // Populates the key-slot radios + label inputs for whichever provider is
+  // currently selected, and checks the one that's active. Does NOT touch
+  // keyInput itself — callers load that separately (it depends on the
+  // active slot's *actual key*, which is an async keystore read, not
+  // something sitting in configCache).
+  function renderKeySlots(provider) {
+    const slots = getAgentConfig().keySlots?.[provider] || { active: 'A', labels: {} };
+    KEY_SLOTS.forEach(slot => {
+      const { radio, labelInput } = keySlotInputs[slot];
+      radio.checked = slots.active === slot;
+      labelInput.value = slots.labels?.[slot] || '';
+    });
+  }
+
+  function activeSlot(provider) {
+    return getAgentConfig().keySlots?.[provider]?.active || 'A';
+  }
+
+  async function loadKeyForActiveSlot(provider) {
+    keyInput.value = await getProviderKey(provider, activeSlot(provider));
+    keyNoteText.textContent = await keyStorageDescription();
+  }
+
+  // Switching the radio doesn't autosave (see the <small> hint under the key
+  // field) — it just swaps which slot's key the field shows right now, and
+  // Save is what commits "this slot is active" into config. If the person
+  // switches slots and closes without saving, reopening shows the old active
+  // slot again, same as any other unsaved field in this drawer.
+  KEY_SLOTS.forEach(slot => {
+    keySlotInputs[slot].radio.addEventListener('change', async () => {
+      const provider = providerSelect.value;
+      keyInput.value = await getProviderKey(provider, slot);
+    });
+  });
+
   providerSelect.addEventListener('change', async () => {
     applyProviderVisibility();
     // Per-provider model memory — switching providers restores
     // that provider's own last-used model, same as the key restore right
     // below it.
     const config = getAgentConfig();
-    modelInput.value = config.models[providerSelect.value] || '';
-    if (providerSelect.value !== 'ollama') {
-      keyInput.value = await getProviderKey(providerSelect.value);
-      keyNoteText.textContent = await keyStorageDescription();
+    const provider = providerSelect.value;
+    modelInput.value = config.models[provider] || '';
+    fillDatalist(modelHistoryList, config.modelHistory?.[provider]);
+    if (provider !== 'ollama') {
+      renderKeySlots(provider);
+      await loadKeyForActiveSlot(provider);
     }
   });
 
   async function open() {
     overlay.classList.add('open');
 
+    // mount() kicks off refreshAgentConfigCache() as fire-and-forget so it
+    // never blocks boot — almost always finished by the time a person
+    // actually clicks to open this drawer, but if not (very fast click,
+    // slow disk/server), wait for it here rather than briefly rendering
+    // stale defaults and then silently overwriting a real saved value with
+    // them on the next Save.
+    if (!isAgentConfigLoaded()) {
+      await refreshAgentConfigCache();
+    }
+
     const config = getAgentConfig();
     providerSelect.value = config.provider;
     modelInput.value = config.models[config.provider] || '';
+    fillDatalist(modelHistoryList, config.modelHistory?.[config.provider]);
     ollamaUrlInput.value = config.ollamaUrl;
+    fillDatalist(ollamaUrlHistoryList, config.ollamaUrlHistory);
     scopeSelect.value = config.scope;
     modeSelect.value = config.mode;
 
@@ -365,8 +456,8 @@ export function buildSettingsPanel({ triggerEl, getEditor, getCurrentPath } = {}
     await loadAgentsList(config.agentKey);
 
     if (config.provider !== 'ollama') {
-      keyInput.value = await getProviderKey(config.provider);
-      keyNoteText.textContent = await keyStorageDescription();
+      renderKeySlots(config.provider);
+      await loadKeyForActiveSlot(config.provider);
     }
   }
 
@@ -377,23 +468,32 @@ export function buildSettingsPanel({ triggerEl, getEditor, getCurrentPath } = {}
   async function save() {
     const provider = providerSelect.value;
     const isOllama = provider === 'ollama';
+    let slot = 'A';
 
     if (!isOllama) {
-      await setProviderKey(provider, keyInput.value);
+      slot = KEY_SLOTS.find(s => keySlotInputs[s].radio.checked) || 'A';
+      await setProviderKey(provider, keyInput.value, slot);
     }
 
-    const config = getAgentConfig();
-    setAgentConfig({
+    // Saves the model into both this provider's "current value" slot and
+    // its MRU history in one call — see storage.js's saveModelForProvider.
+    await saveModelForProvider(provider, modelInput.value);
+    await saveOllamaUrl(ollamaUrlInput.value);
+
+    // Now writes through to the vault's _agent-config.json (see
+    // storage.js's setAgentConfig) — await it so "Settings saved." only
+    // shows once the write has actually happened, not just queued.
+    await setAgentConfig({
       provider,
-      // Per-provider model memory — write into this
-      // provider's slot in the map, leaving every other provider's
-      // remembered model untouched.
-      models: { ...config.models, [provider]: modelInput.value },
-      ollamaUrl: ollamaUrlInput.value,
       agentKey: agentSelect.value,
       scope: scopeSelect.value,
       mode: modeSelect.value,
     });
+
+    if (!isOllama) {
+      await setActiveKeySlot(provider, slot);
+      await setKeySlotLabel(provider, slot, keySlotInputs[slot].labelInput.value);
+    }
 
     runStatusText.textContent = 'Settings saved.';
   }

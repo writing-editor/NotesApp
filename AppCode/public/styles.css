@@ -1398,6 +1398,30 @@
       flex-direction: column;
       gap: 0.35rem;
     }
+    /* Two named key slots ("A"/"B") per provider — a radio to pick which
+       one is active, plus its own editable label, side by side. Reuses the
+       same row/gap rhythm as .settings-row above rather than introducing a
+       new spacing scale. */
+    .ai-key-slot-toggle {
+      display: flex;
+      gap: 0.8rem;
+      margin-bottom: 0.35rem;
+    }
+    .ai-key-slot {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      gap: 0.4rem;
+    }
+    .ai-key-slot input[type="radio"] {
+      width: auto;
+      margin: 0;
+      accent-color: var(--ink);
+    }
+    .ai-key-slot-label {
+      flex: 1;
+      min-width: 0;
+    }
     .settings-section label {
       font-family: var(--font-ui);
       font-size: 0.55rem;

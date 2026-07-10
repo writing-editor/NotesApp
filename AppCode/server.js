@@ -757,6 +757,37 @@ app.post('/api/progress', (req, res) => {
   }
 });
 
+// AI agent config (provider, per-provider model, ollama URL, agent profile,
+// scope, mode). Deliberately its own file rather than folded into
+// _progress.json — different concern (reading position vs. agent
+// preferences), and a save-race on one would otherwise risk clobbering the
+// other with a stale field. Kept in the vault (per-book), not in Electron's
+// userData, so it survives regardless of which port the local server ends up
+// on and travels with the vault if it's moved or synced — see ai-src/storage.js
+// for why this replaced the old localStorage-only approach.
+const agentConfigFile = () => path.join(VAULT, '_agent-config.json');
+
+app.get('/api/agent-config', (req, res) => {
+  if (!VAULT) return res.status(400).json({ error: 'No vault selected' });
+  if (!fs.existsSync(agentConfigFile())) return res.json({});
+  try {
+    res.json(JSON.parse(fs.readFileSync(agentConfigFile(), 'utf8')));
+  } catch { res.json({}); }
+});
+
+app.post('/api/agent-config', (req, res) => {
+  if (!VAULT) return res.status(400).json({ error: 'No vault selected' });
+  try {
+    const data = { ...(req.body || {}), savedAt: Date.now() };
+    const tmp = agentConfigFile() + '.tmp';
+    fs.writeFileSync(tmp, JSON.stringify(data, null, 2), 'utf8');
+    fs.renameSync(tmp, agentConfigFile());
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // ── Filesystem browser (for vault picker UI) ─────────────────────────────────
 app.get('/api/browse', (req, res) => {
   // dir param is optional — defaults to home directory
