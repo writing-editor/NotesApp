@@ -261,15 +261,8 @@ function buildPrompt({ systemPrompt, chapterText }) {
     '  paragraph IDs where it recurs by their actual "Pn" tags, not a vague',
     '  count (e.g. "\'suddenly\' also appears in P7, P12, and P19" \u2014 not',
     '  "appears 6 times in this text").',
-    '- Roughly one note per 5-8 paragraphs, averaged across the WHOLE text,',
-    '  is a reasonable ceiling for most agents \u2014 fewer or even one is',
-    '  preferable, higher-value notes are always better than more, lower-',
-    '  value ones. This is a whole-text average, not a local quota: it',
-    '  exists to stop you manufacturing a note for every minor nitpick, not',
-    '  to make you skip a paragraph with its own distinct, genuine issue',
-    '  just because a nearby paragraph already got one. Two adjacent',
-    '  paragraphs with two different real problems both still deserve their',
-    '  own note.',
+    '- Use British spelling and punctuation conventions (e.g. "colour", "centre", "realise", Oxford commas, etc.)', 
+    '  unless the text is clearly written in American English, in which case use American conventions.',
   ].join('\n');
 
   const behaviour = (systemPrompt || '').trim();
