@@ -11,14 +11,22 @@
 //      from the request body (see server.js's /api/ai/chat handler).
 //   2. Dispatch to the right provider adapter (callClaude/callOpenAI/
 //      callGemini/callOllama), each of which prompts the model to return
-//      ONLY a JSON array of note placements and nothing else.
-//   3. Parse + validate the model's raw text response into placements of
-//      the shape { charPos, content }, resolving against chapterText so a
-//      bad/out-of-range offset from the model can't corrupt the document.
-//      Includes a pre-write invariant check: a placement whose
-//      charPos would land inside an existing `[mn.*: ...]` note's marker
-//      span is rejected outright (not clamped), since clamping there has no
-//      safe destination — see resolvePlacements()'s comment below.
+//      ONLY a JSON array of note placements and nothing else. The model is
+//      never asked for a raw character offset — chapterText is pre-split
+//      into paragraphs (lib/paragraphs.js) and numbered before it's shown
+//      to the model, which only ever names a paragraph ID ("P3") it
+//      recognizes from that numbering. See buildPrompt()'s comment below
+//      for why (models can't reliably count characters; they can
+//      recognize which paragraph they're looking at).
+//   3. Parse + validate the model's raw text response — { paragraphId,
+//      content } entries — resolving each paragraphId to that paragraph's
+//      real, exact charPos (a lookup, not a guess) so the final placement
+//      shape handed back is still { charPos, content }, unchanged for
+//      every downstream consumer (noteSplice.js, agentRunner.js). Includes
+//      a pre-write invariant check: a resolved charPos that would land
+//      inside an existing `[mn.*: ...]` note's marker span is rejected
+//      outright (not clamped), since clamping there has no safe
+//      destination — see resolveParagraphPlacements()'s comment below.
 //   4. Return { ok: true, placements, rejected } or { ok: false, error }.
 //      `rejected` is the count of placements dropped by the §3 check above
 //      (0 when nothing was dropped) — server.js's route passes it straight
@@ -39,10 +47,12 @@
 
 'use strict';
 
+const { splitIntoParagraphs } = require('./paragraphs');
+
 // ── §3 hallucination-protection: pre-write invariant check ──────────────────
 //
 // Finds every existing `[mn...: ...]` note marker's [start, end) span in a
-// chunk of raw text, so resolvePlacements() below can reject (not clamp) any
+// chunk of raw text, so resolveParagraphPlacements() below can reject (not clamp) any
 // model-proposed charPos that would land *inside* one of those spans — which
 // would otherwise silently split an existing note's marker in half when the
 // insertion happens (both spliceNotes()'s insertNoteAt() and
@@ -82,7 +92,7 @@ function landsInsideExistingNote(pos, spans) {
 // ── Shared placement-parsing step ───────────────────────────────────────────
 //
 // Every provider is prompted to return ONLY a JSON array like:
-//   [{ "charPos": 1234, "content": "note text" }, ...]
+//   [{ "paragraphId": "P3", "content": "note text" }, ...]
 // Models are unreliable about "ONLY" (code fences, leading prose, trailing
 // commentary), so this strips the common wrapping before JSON.parse rather
 // than trusting the raw string. Anything that still doesn't parse, isn't an
@@ -114,47 +124,55 @@ function extractJsonArray(rawText) {
   return parsed;
 }
 
-// Validates raw placements against the actual chapter text.
-// - charPos must be a finite number; out-of-range values are clamped into
-//   [0, chapterText.length] rather than rejected outright, since an
-//   off-by-a-little offset (e.g. the model counting a trailing newline
-//   differently) shouldn't lose an otherwise-good note — insertNoteAt() on
-//   the client just inserts at a document position, so a clamped position
-//   is still safe, just possibly a character or two off.
+// Validates raw placements against the actual paragraph list — NOT against
+// a raw character offset the model invented. The model is never asked for
+// charPos at all (see buildPrompt() below): it's shown text pre-split and
+// numbered into paragraphs ("[P1] ...", "[P2] ...") and asked only to name
+// which paragraph a note belongs to. This function's whole job is turning
+// that paragraphId back into the one real, exact charPos the code already
+// knows for that paragraph — a string-index lookup, not a guess — so a
+// note anchored to "paragraph 4" always lands at the actual start of
+// paragraph 4, never mid-word or in a neighboring paragraph.
+//
+// - paragraphId must match one of `paragraphs`' ids (as produced by
+//   splitIntoParagraphs()) exactly. Anything else (missing, misspelled,
+//   an id past the end of the text) is dropped — there's no reasonable
+//   position to clamp a bad id to, unlike the old charPos scheme where an
+//   off-by-a-little number could still be clamped safely.
 // - content must be a non-empty string after trimming.
-// - §3 stricter check: a charPos landing *inside* an existing `[mn.*: ...]`
-//   marker's span is REJECTED, not clamped — clamping there would move the
-//   insertion to a span boundary silently, which either merges into an
-//   adjacent note's text or (worse) still lands mid-marker after rounding.
-//   Rejecting is the only safe move for this one case, since there's no
-//   nearby "correct" position to clamp to that isn't itself a guess. Existing
-//   note spans are computed once per call via findExistingNoteSpans() and
-//   passed in as `existingSpans` — cheap, since the model returns at most a
-//   few dozen placements per call and a manuscript chapter has at most a
-//   few dozen existing notes.
-// - Entries failing either the content or charPos-finite check are dropped
-//   silently, same as before. Entries rejected for landing inside an
-//   existing marker are reported separately via the returned `rejected`
-//   count, since that's a signal worth surfacing (a run that rejected
-//   several placements likely got confused about offsets) rather than
-//   silently disappearing the way a malformed/empty entry does.
+// - At most ONE placement per paragraph is kept — the prompt asks for this,
+//   but a model that ignores it and returns two entries for the same
+//   paragraph shouldn't produce two overlapping notes; the first one in
+//   the model's own returned order wins and later duplicates for that same
+//   paragraphId are dropped.
+// - §3 stricter check, unchanged in spirit from before: a resolved charPos
+//   landing *inside* an existing `[mn.*: ...]` marker's span is REJECTED,
+//   not clamped — there's no nearby "correct" position to clamp to that
+//   isn't itself a guess. This is now rare (paragraph starts essentially
+//   never sit inside a note marker) but kept as a backstop for the
+//   rare paragraph whose very first character was itself where a prior
+//   run inserted a note.
 // - This function never throws.
-function resolvePlacements(rawPlacements, chapterText, existingSpans) {
-  const maxPos = typeof chapterText === 'string' ? chapterText.length : 0;
+function resolveParagraphPlacements(rawPlacements, paragraphs, existingSpans) {
   const spans = Array.isArray(existingSpans) ? existingSpans : [];
+  const byId = new Map(paragraphs.map((p) => [p.id, p]));
+  const seenIds = new Set();
   const out = [];
   let rejected = 0;
   for (const p of rawPlacements) {
     if (!p || typeof p !== 'object') continue;
     const content = typeof p.content === 'string' ? p.content.trim() : '';
     if (!content) continue;
-    let charPos = Number(p.charPos);
-    if (!Number.isFinite(charPos)) continue;
-    charPos = Math.max(0, Math.min(Math.round(charPos), maxPos));
+    const paragraphId = typeof p.paragraphId === 'string' ? p.paragraphId.trim() : '';
+    const paragraph = byId.get(paragraphId);
+    if (!paragraph) continue; // unknown/malformed id — nothing safe to clamp to
+    if (seenIds.has(paragraphId)) continue; // one note per paragraph, first wins
+    const charPos = paragraph.start;
     if (landsInsideExistingNote(charPos, spans)) {
       rejected++;
       continue;
     }
+    seenIds.add(paragraphId);
     out.push({ charPos, content });
   }
   return { placements: out, rejected };
@@ -169,39 +187,77 @@ function resolvePlacements(rawPlacements, chapterText, existingSpans) {
 // scope), and the vault itself isn't always fiction (see e.g. Copyedit.md,
 // written for treaty/legal text). "Chapter" would be actively wrong for a
 // selection or a non-fiction document; "text" is accurate for all of them.
+//
+// ── Why paragraphs, not characters ──────────────────────────────────────
+// This used to ask the model for a raw character offset ("each character
+// position numbered from 0... charPos must be an integer offset"). That
+// doesn't work: models don't reliably count characters over a document of
+// any real length, so the offsets they returned were routinely off —
+// landing mid-word, in the wrong sentence, sometimes in the wrong
+// paragraph entirely. The model was being asked to do coordinate
+// arithmetic it can't do accurately, and every downstream placement bug
+// traced back to trusting that number.
+//
+// Instead, splitIntoParagraphs() (lib/paragraphs.js) segments the text
+// server-side first, and the model is only ever asked to name a
+// paragraph's ID ("P1", "P2", ...) it already sees printed next to that
+// paragraph in the prompt — recognizing which block of text it's talking
+// about, not counting characters. resolveParagraphPlacements() then looks
+// up that id's exact, real start offset — a deterministic string lookup
+// the code already has, not a guess. This also naturally bounds each note
+// to "the issues in this one paragraph," which is what pushes the model
+// toward one substantive note per paragraph instead of a separate tiny
+// note per word-level nitpick — the old failure mode where notes were
+// individually so small they read as clutter came from the same
+// character-counting framing as the misplacement bug, not a separate
+// problem with a separate fix.
 function buildPrompt({ systemPrompt, chapterText }) {
+  const paragraphs = splitIntoParagraphs(chapterText);
+  const numberedText = paragraphs
+    .map((p) => `[${p.id}] ${p.text}`)
+    .join('\n\n');
+
   const instructions = [
     'You are an editorial assistant annotating a document with margin',
-    'notes. You will be given the text to review as plain markdown, with',
-    'each character position numbered from 0.',
+    'notes. The text below has already been split into paragraphs for you',
+    'and each one is tagged with its ID in square brackets, e.g. "[P3]"',
+    'immediately before that paragraph\'s text. These IDs are the ONLY way',
+    'you place a note \u2014 you never count characters or estimate a position',
+    'yourself.',
     '',
-    'Decide where notes belong and what each should say. Respond with ONLY a',
-    'JSON array, no prose before or after it, no markdown code fence, in',
-    'exactly this shape:',
-    '[{"charPos": <integer character offset into the text>, "content": "<note text>"}]',
+    'Decide which paragraphs need a note and what each should say. Respond',
+    'with ONLY a JSON array, no prose before or after it, no markdown code',
+    'fence, in exactly this shape:',
+    '[{"paragraphId": "<the P-number of the paragraph, exactly as tagged, e.g. \\"P3\\">", "content": "<note text>"}]',
     '',
     'Rules:',
-    '- charPos must be an integer offset into the text exactly as given.',
+    '- paragraphId must be copied exactly from one of the "[Pn]" tags shown',
+    '  \u2014 do not invent an id, and do not try to point at a specific word,',
+    '  sentence, or character within the paragraph; a note always applies',
+    '  to the whole paragraph it is tagged with.',
+    '- At most ONE note per paragraph. If a paragraph has more than one',
+    '  issue worth flagging, combine them into that paragraph\'s single note',
+    '  (e.g. as short clauses or a semicolon-separated list) rather than',
+    '  returning two entries with the same paragraphId.',
     '- Return an empty array [] if no notes are warranted.',
-    '- Keep each note\'s content concise (a sentence or two).',
     '- Do not include any text outside the JSON array.',
     '',
-    'Density — this is the most important rule and overrides your own sense',
+    'Density \u2014 this is the most important rule and overrides your own sense',
     'of thoroughness:',
-    '- Do not flag every instance of an issue. A margin note next to every',
-    '  other sentence is not useful to the person reading it \u2014 it is clutter',
-    '  they have to read past.',
-    '- Only flag something if fixing it would meaningfully improve the',
-    '  text. If you are unsure whether an issue is worth a note, leave it',
-    '  unflagged.',
-    '- If the same kind of issue (e.g. a repeated crutch word) occurs many',
-    '  times, do not write a separate note for each occurrence. Note it once,',
-    '  at its first or most representative occurrence, and mention in that',
-    "  one note that it recurs (e.g. \"'suddenly' appears 6 times in this",
+    '- Do not flag every paragraph. A margin note next to every paragraph is',
+    '  not useful to the person reading it \u2014 it is clutter they have to read',
+    '  past. Most paragraphs in a clean text should get no note at all.',
+    '- Only flag a paragraph if fixing what you\'d note would meaningfully',
+    '  improve the text. If you are unsure whether an issue is worth a note,',
+    '  leave it unflagged.',
+    '- If the same kind of issue (e.g. a repeated crutch word) occurs in',
+    '  many paragraphs, do not give each one its own note. Note it once, on',
+    '  its first or most representative paragraph, and mention in that one',
+    "  note that it recurs (e.g. \"'suddenly' appears 6 times in this",
     '  text \u2014 here and at a few other points\").',
-    '- Roughly one note per 200-300 words of text is a reasonable ceiling',
-    '  for most agents. Fewer or even one is preferable, higher-value notes are always better than',
-    '  more, lower-value ones.',
+    '- Roughly one note per 5-8 paragraphs is a reasonable ceiling for most',
+    '  agents. Fewer or even one is preferable \u2014 higher-value notes are',
+    '  always better than more, lower-value ones.',
   ].join('\n');
 
   const behaviour = (systemPrompt || '').trim();
@@ -209,9 +265,9 @@ function buildPrompt({ systemPrompt, chapterText }) {
     ? `${instructions}\n\nAdditional instructions from the user for this agent:\n${behaviour}`
     : instructions;
 
-  const userMessage = `Text:\n\n${chapterText || ''}`;
+  const userMessage = `Text (paragraph IDs shown in [brackets]):\n\n${numberedText}`;
 
-  return { fullSystem, userMessage };
+  return { fullSystem, userMessage, paragraphs };
 }
 
 // ── Provider adapters ───────────────────────────────────────────────────────
@@ -336,8 +392,8 @@ const ADAPTERS = {
 // run to anything past the cap if the model happened to front-load its
 // notes). Picks by evenly sampling across the sorted list, not by any
 // judgment of which note is "better" — this function has no way to know
-// that, only resolvePlacements' upstream content/position checks do.
-const MIN_WORDS_PER_NOTE = 50; // stricter than the prompt's own 200-300 suggestion, since this is the hard ceiling, not the target
+// that, only resolveParagraphPlacements' upstream content/position checks do.
+const MIN_WORDS_PER_NOTE = 50; // stricter than the prompt's own "~1 per 5-8 paragraphs" suggestion, since this is the hard ceiling, not the target
 function capPlacementDensity(placements, chapterText) {
   const wordCount = (chapterText || '').trim().split(/\s+/).filter(Boolean).length;
   const maxNotes = Math.max(3, Math.ceil(wordCount / MIN_WORDS_PER_NOTE));
@@ -361,7 +417,7 @@ async function chat({ provider, model, apiKey, ollamaUrl, systemPrompt, chapterT
     return { ok: false, error: 'No text provided' };
   }
 
-  const { fullSystem, userMessage } = buildPrompt({ systemPrompt, chapterText });
+  const { fullSystem, userMessage, paragraphs } = buildPrompt({ systemPrompt, chapterText });
 
   let rawText;
   try {
@@ -372,7 +428,7 @@ async function chat({ provider, model, apiKey, ollamaUrl, systemPrompt, chapterT
 
   const rawPlacements = extractJsonArray(rawText);
   const existingSpans = findExistingNoteSpans(chapterText);
-  const { placements: resolved, rejected } = resolvePlacements(rawPlacements, chapterText, existingSpans);
+  const { placements: resolved, rejected } = resolveParagraphPlacements(rawPlacements, paragraphs, existingSpans);
   const { kept: placements, capped } = capPlacementDensity(resolved, chapterText);
 
   // Surfaced but non-fatal: a run that rejected or capped placements still
@@ -389,7 +445,8 @@ module.exports = {
   chat,
   // Exported for unit testing only — server.js only ever calls chat().
   _extractJsonArray: extractJsonArray,
-  _resolvePlacements: resolvePlacements,
+  _resolveParagraphPlacements: resolveParagraphPlacements,
   _findExistingNoteSpans: findExistingNoteSpans,
   _capPlacementDensity: capPlacementDensity,
+  _splitIntoParagraphs: splitIntoParagraphs,
 };

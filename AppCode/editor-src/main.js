@@ -11,6 +11,7 @@ import { languages } from '@codemirror/language-data'; // fenced code block high
 import { livePreviewMarks } from './livePreview.js';
 import { noteMarkerWidgets, findNoteMarkers } from './noteWidgets.js';
 import { marginBridge } from './marginSync.js';
+import { paragraphGutter } from './paragraphGutter.js';
 
 /**
  * @param {Object} opts
@@ -81,6 +82,7 @@ export function createLiveEditor({
         livePreviewMarks,
         noteMarkerWidgets,
         marginBridge({ onNotesChanged, onLayoutChanged }),
+        paragraphGutter,
         clickHandler,
         selectionWatcher,
         EditorView.lineWrapping,

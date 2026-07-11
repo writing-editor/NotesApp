@@ -306,7 +306,35 @@
       text-align: justify;
       hyphens: auto;
     }
-    .main-text .cm-gutters { display: none; } /* no line numbers in a reading/writing surface */
+    /* Paragraph-number gutter — sits in the space CM6 reserves for line
+       numbers, between the sidebar and the reading column, but shows one
+       small number per PARAGRAPH (its first line only), not one per line.
+       This is deliberately the same numbering lib/ai-proxy.js's
+       buildPrompt() shows the AI agent (see editor-src/paragraphGutter.js)
+       so "paragraph 4" here and "P4" in an agent's note are always the
+       same block of text. No cm-lineNumbers gutter is added anywhere in
+       this app, so this rule only ever affects our own gutter — nothing
+       else lives in `.cm-gutters`. Hidden on mobile entirely (see the
+       max-width:768px block below) since there's no room for it there and
+       the margin column it'd cross-reference is hidden at that width too. */
+    .main-text .cm-gutters {
+      background: transparent;
+      border-right: none;
+      color: var(--ink-faint);
+    }
+    .cm-paragraph-gutter {
+      padding-right: 0.6rem;
+    }
+    .cm-paragraph-number {
+      display: inline-block;
+      width: 100%;
+      text-align: right;
+      font-family: var(--font-ui);
+      font-size: 0.6rem;
+      letter-spacing: 0.04em;
+      color: var(--ink-faint);
+      user-select: none;
+    }
     .main-text .cm-selectionBackground { background: rgba(0,0,0,0.08) !important; }
     .main-text .cm-cursor { border-left-color: var(--ink); }
     .main-text .cm-activeLine { background: transparent; } /* live-preview marks already show the active line */
@@ -954,6 +982,11 @@
 
       /* On mobile the margin column disappears — notes show as bottom sheet */
       .margin-col { display: none; }
+
+      /* Paragraph numbers are a desktop reading-margin aid; no room for
+         them on a phone-width column, and the note chips they'd help
+         cross-reference are hidden here too (see .margin-col above). */
+      .main-text .cm-gutters { display: none; }
 
       /* Mobile popup becomes bottom sheet */
       .mn-popup {
