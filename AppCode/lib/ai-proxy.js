@@ -162,22 +162,46 @@ function resolvePlacements(rawPlacements, chapterText, existingSpans) {
 
 // Builds the instruction wrapper common to every provider — the per-provider
 // adapters differ only in how they get this text to the model and back.
+//
+// Deliberately says "text" throughout, not "chapter" — this same wrapper
+// runs for a whole chapter (chapter scope), a single highlighted paragraph
+// or two (selection scope), and every file in the vault in turn (all
+// scope), and the vault itself isn't always fiction (see e.g. Copyedit.md,
+// written for treaty/legal text). "Chapter" would be actively wrong for a
+// selection or a non-fiction document; "text" is accurate for all of them.
 function buildPrompt({ systemPrompt, chapterText }) {
   const instructions = [
-    'You are an editorial assistant annotating a manuscript chapter with',
-    'margin notes. You will be given the full chapter text as plain markdown,',
-    'with each character position numbered from 0.',
+    'You are an editorial assistant annotating a document with margin',
+    'notes. You will be given the text to review as plain markdown, with',
+    'each character position numbered from 0.',
     '',
     'Decide where notes belong and what each should say. Respond with ONLY a',
     'JSON array, no prose before or after it, no markdown code fence, in',
     'exactly this shape:',
-    '[{"charPos": <integer character offset into the chapter text>, "content": "<note text>"}]',
+    '[{"charPos": <integer character offset into the text>, "content": "<note text>"}]',
     '',
     'Rules:',
-    '- charPos must be an integer offset into the chapter text exactly as given.',
+    '- charPos must be an integer offset into the text exactly as given.',
     '- Return an empty array [] if no notes are warranted.',
     '- Keep each note\'s content concise (a sentence or two).',
     '- Do not include any text outside the JSON array.',
+    '',
+    'Density — this is the most important rule and overrides your own sense',
+    'of thoroughness:',
+    '- Do not flag every instance of an issue. A margin note next to every',
+    '  other sentence is not useful to the person reading it \u2014 it is clutter',
+    '  they have to read past.',
+    '- Only flag something if fixing it would meaningfully improve the',
+    '  text. If you are unsure whether an issue is worth a note, leave it',
+    '  unflagged.',
+    '- If the same kind of issue (e.g. a repeated crutch word) occurs many',
+    '  times, do not write a separate note for each occurrence. Note it once,',
+    '  at its first or most representative occurrence, and mention in that',
+    "  one note that it recurs (e.g. \"'suddenly' appears 6 times in this",
+    '  text \u2014 here and at a few other points\").',
+    '- Roughly one note per 200-300 words of text is a reasonable ceiling',
+    '  for most agents. Fewer or even one is preferable, higher-value notes are always better than',
+    '  more, lower-value ones.',
   ].join('\n');
 
   const behaviour = (systemPrompt || '').trim();
@@ -185,7 +209,7 @@ function buildPrompt({ systemPrompt, chapterText }) {
     ? `${instructions}\n\nAdditional instructions from the user for this agent:\n${behaviour}`
     : instructions;
 
-  const userMessage = `Chapter text:\n\n${chapterText || ''}`;
+  const userMessage = `Text:\n\n${chapterText || ''}`;
 
   return { fullSystem, userMessage };
 }
@@ -302,13 +326,39 @@ const ADAPTERS = {
 // Always resolves (never rejects) with either:
 //   { ok: true, placements: [{ charPos, content }, ...], rejected: <number> }
 //   { ok: false, error: '<message safe to show in the settings panel>' }
+// Hard backstop behind the prompt's own density guidance (see buildPrompt's
+// "Density" rule) — a small/local model in particular may ignore a prompt
+// instruction it was given and return a note for nearly every sentence
+// anyway. Rather than trusting the prompt alone, cap the *actual* placement
+// count server-side at roughly one note per MIN_WORDS_PER_NOTE words of
+// chapter text, keeping placements spread across the chapter rather than
+// e.g. only the first N in document order (which would silently blind the
+// run to anything past the cap if the model happened to front-load its
+// notes). Picks by evenly sampling across the sorted list, not by any
+// judgment of which note is "better" — this function has no way to know
+// that, only resolvePlacements' upstream content/position checks do.
+const MIN_WORDS_PER_NOTE = 50; // stricter than the prompt's own 200-300 suggestion, since this is the hard ceiling, not the target
+function capPlacementDensity(placements, chapterText) {
+  const wordCount = (chapterText || '').trim().split(/\s+/).filter(Boolean).length;
+  const maxNotes = Math.max(3, Math.ceil(wordCount / MIN_WORDS_PER_NOTE));
+  if (placements.length <= maxNotes) return { kept: placements, capped: 0 };
+
+  const sorted = [...placements].sort((a, b) => a.charPos - b.charPos);
+  const step = sorted.length / maxNotes;
+  const kept = [];
+  for (let i = 0; i < maxNotes; i++) {
+    kept.push(sorted[Math.floor(i * step)]);
+  }
+  return { kept, capped: sorted.length - kept.length };
+}
+
 async function chat({ provider, model, apiKey, ollamaUrl, systemPrompt, chapterText }) {
   const adapter = ADAPTERS[provider];
   if (!adapter) {
     return { ok: false, error: `Unknown provider: ${provider}` };
   }
   if (typeof chapterText !== 'string' || !chapterText.trim()) {
-    return { ok: false, error: 'No chapter text provided' };
+    return { ok: false, error: 'No text provided' };
   }
 
   const { fullSystem, userMessage } = buildPrompt({ systemPrompt, chapterText });
@@ -322,14 +372,17 @@ async function chat({ provider, model, apiKey, ollamaUrl, systemPrompt, chapterT
 
   const rawPlacements = extractJsonArray(rawText);
   const existingSpans = findExistingNoteSpans(chapterText);
-  const { placements, rejected } = resolvePlacements(rawPlacements, chapterText, existingSpans);
+  const { placements: resolved, rejected } = resolvePlacements(rawPlacements, chapterText, existingSpans);
+  const { kept: placements, capped } = capPlacementDensity(resolved, chapterText);
 
-  // Surfaced but non-fatal: a run that rejected placements still returns
-  // ok:true with whatever's left — see agentRunner.js/settingsPanel.js for
-  // how `rejected > 0` is folded into the run summary rather than treated
-  // as an error, since "the model proposed something bad and we caught it"
-  // is exactly this check working as intended, not a failure of the run.
-  return { ok: true, placements, rejected };
+  // Surfaced but non-fatal: a run that rejected or capped placements still
+  // returns ok:true with whatever's left — see agentRunner.js/
+  // settingsPanel.js for how `rejected`/`capped` are folded into the run
+  // summary rather than treated as an error. A capped run isn't a bug catch
+  // the way a rejected one is (that's the model returning something bad);
+  // it's this function trimming an over-eager but individually valid
+  // response back down to something a person can actually work with.
+  return { ok: true, placements, rejected, capped };
 }
 
 module.exports = {
@@ -338,4 +391,5 @@ module.exports = {
   _extractJsonArray: extractJsonArray,
   _resolvePlacements: resolvePlacements,
   _findExistingNoteSpans: findExistingNoteSpans,
+  _capPlacementDensity: capPlacementDensity,
 };

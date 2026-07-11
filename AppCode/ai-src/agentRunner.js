@@ -185,6 +185,9 @@ export async function runAgent({ getEditor, getCurrentPath, onAfterMutation, onS
         preview,
       });
     }
+    if (scope === 'selection') {
+      return await runSelectionScope({ editor, connection, controller, onAfterMutation, notify, preview });
+    }
     return await runChapterScope({ editor, connection, controller, onAfterMutation, notify, preview });
   } finally {
     if (inFlightController === controller) inFlightController = null;
@@ -230,6 +233,11 @@ async function runChapterScope({ editor, connection, controller, onAfterMutation
   // rather than treated as an error: a rejection means the check caught
   // something, not that the run failed.
   const rejectedNote = describeRejected(result.rejected);
+  // Same idea for the density cap (ai-proxy.js's capPlacementDensity) — a
+  // run that got trimmed for being too dense still succeeded, it's just
+  // worth telling the person some proposed notes were dropped rather than
+  // silently only ever showing the capped count.
+  const cappedNote = describeCapped(result.capped);
 
   // Stage 6: read-only mode stops here — hand the resolved placements back
   // to the caller as a preview instead of splicing. Nothing has touched the
@@ -239,7 +247,7 @@ async function runChapterScope({ editor, connection, controller, onAfterMutation
   if (preview) {
     if (!Array.isArray(result.placements) || result.placements.length === 0) {
       notify('done');
-      return { ok: true, preview: true, placements: [], inserted: 0, detail: joinDetails([rejectedNote]) };
+      return { ok: true, preview: true, placements: [], inserted: 0, detail: joinDetails([rejectedNote, cappedNote]) };
     }
     notify('done');
     return {
@@ -247,7 +255,7 @@ async function runChapterScope({ editor, connection, controller, onAfterMutation
       preview: true,
       placements: result.placements,
       inserted: 0,
-      detail: joinDetails([rejectedNote]),
+      detail: joinDetails([rejectedNote, cappedNote]),
     };
   }
 
@@ -290,7 +298,7 @@ async function runChapterScope({ editor, connection, controller, onAfterMutation
     runId,
     inserted,
     canUndo: inserted > 0,
-    detail: joinDetails([rejectedNote, verification.ok ? null : `Warning: ${verification.detail}`]),
+    detail: joinDetails([rejectedNote, cappedNote, verification.ok ? null : `Warning: ${verification.detail}`]),
   };
 }
 
@@ -303,9 +311,138 @@ function describeRejected(rejected) {
   return `${rejected} placement(s) rejected — proposed position overlapped an existing note.`;
 }
 
+// Companion to describeRejected — see ai-proxy.js's capPlacementDensity for
+// what this is catching: the model returning far more notes than are
+// useful to read. Worded differently from "rejected" on purpose — a
+// rejected placement was something wrong with the model's output, a capped
+// one was fine on its own merits but there were simply too many of them.
+function describeCapped(capped) {
+  if (!capped) return null;
+  return `${capped} note(s) trimmed to keep the chapter readable — the agent proposed more than a reasonable density.`;
+}
+
 function joinDetails(parts) {
   const nonEmpty = parts.filter(Boolean);
   return nonEmpty.length ? nonEmpty.join(' ') : undefined;
+}
+
+// Reads the live editor's current selection range. Exported so
+// settingsPanel.js can check "is there a selection right now" (to enable/
+// disable the Selection scope option and show a word count) without
+// duplicating CodeMirror's state-shape knowledge — this is the one place in
+// ai-src/ that reaches into `editor.view.state.selection` directly.
+// Returns null for a collapsed selection (plain cursor, nothing highlighted)
+// — "selection" here always means a real non-empty range.
+export function getEditorSelection(editor) {
+  if (!editor || !editor.view || !editor.view.state) return null;
+  const { from, to } = editor.view.state.selection.main;
+  if (from === to) return null;
+  return { from, to, text: editor.view.state.doc.sliceString(from, to) };
+}
+
+// ── 'selection' scope ───────────────────────────────────────────────────────
+// Sends only the highlighted text to the model, not the whole chapter — a 4B
+// local model in particular loses coherence and drifts into paraphrasing
+// well before it runs out of context room on a full 10k-word chapter, and a
+// person reviewing one or two paragraphs at a time is a completely
+// reasonable workflow on its own. The model is asked for charPos offsets
+// into *that selection*, since that's the only text it was shown — sending
+// absolute chapter offsets would require the model to somehow know the
+// selection's position in a chapter it never saw, which it has no way to do
+// reliably (or at all, since chapterText below genuinely only ever contains
+// the selected slice). Once the response comes back, every returned
+// charPos is shifted by `selection.from` before splicing, which is the only
+// change from runChapterScope's flow — resolvePlacements() server-side
+// still just clamps into `[0, chapterText.length]` exactly as it always
+// has, using the *sliced* text's own length, so no server-side change was
+// needed at all.
+async function runSelectionScope({ editor, connection, controller, onAfterMutation, notify, preview }) {
+  const selection = getEditorSelection(editor);
+  if (!selection) {
+    notify('error');
+    return {
+      ok: false,
+      kind: 'no-selection',
+      error: 'Nothing is selected in the editor. Highlight a paragraph or two, then run again.',
+    };
+  }
+
+  const chapterText = selection.text;
+  if (!chapterText || !chapterText.trim()) {
+    notify('error');
+    return { ok: false, kind: 'empty', error: 'The selected text is empty — nothing to send.' };
+  }
+
+  notify('thinking');
+
+  const result = await callAiChat({ ...connection, chapterText }, controller);
+  if (!result.ok) {
+    notify(result.cancelled ? 'cancelled' : 'error');
+    return { ok: false, kind: result.cancelled ? 'cancelled' : (result.kind || 'server'), error: result.error };
+  }
+
+  const rejectedNote = describeRejected(result.rejected);
+  const cappedNote = describeCapped(result.capped);
+
+  // Shift every placement from "offset into the selection" to "offset into
+  // the whole chapter" — the one step that's actually new here. Done
+  // immediately after the response so every caller below this line (preview
+  // rendering, spliceNotes, undo bookkeeping) works with ordinary absolute
+  // charPos values exactly like runChapterScope's, and none of them need to
+  // know selection scope exists at all.
+  const shiftedPlacements = (result.placements || []).map((p) => ({
+    ...p,
+    charPos: p.charPos + selection.from,
+  }));
+
+  if (preview) {
+    if (shiftedPlacements.length === 0) {
+      notify('done');
+      return { ok: true, preview: true, placements: [], inserted: 0, detail: joinDetails([rejectedNote, cappedNote]) };
+    }
+    notify('done');
+    return {
+      ok: true,
+      preview: true,
+      placements: shiftedPlacements,
+      inserted: 0,
+      detail: joinDetails([rejectedNote, cappedNote]),
+    };
+  }
+
+  // Snapshot the *whole* doc (not just the selection) before the splice —
+  // insertNoteAt/spliceNotes operate on absolute offsets into the full
+  // document, same as chapter scope, so the post-write invariant check
+  // needs the full before/after text to mean anything.
+  const before = editor.getDoc();
+  const inserted = spliceNotes({
+    editor,
+    placements: shiftedPlacements,
+    onAfterMutation,
+  });
+  const after = editor.getDoc();
+
+  const verification = verifyInsertOnly(before, after);
+  if (!verification.ok) {
+    console.error('[ai-agent] post-write invariant check failed:', verification.detail);
+  }
+
+  const runId = ++runCounter;
+  lastRun = {
+    runId,
+    insertedNotes: shiftedPlacements
+      .filter((p) => typeof p.content === 'string' && p.content.trim())
+      .map((p) => ({ path: null, content: p.content, charPos: p.charPos })),
+  };
+
+  notify('done');
+  return {
+    ok: true,
+    runId,
+    inserted,
+    canUndo: inserted > 0,
+    detail: joinDetails([rejectedNote, cappedNote, verification.ok ? null : `Warning: ${verification.detail}`]),
+  };
 }
 
 // ── 'all' scope (Stage 5) ───────────────────────────────────────────────────
@@ -341,6 +478,7 @@ async function runAllChaptersScope({ editor, getCurrentPath, connection, control
 
   let totalInserted = 0;
   let totalRejected = 0;
+  let totalCapped = 0;
   let chaptersTouched = 0;
   const skipped = [];
   const warnings = [];
@@ -389,6 +527,7 @@ async function runAllChaptersScope({ editor, getCurrentPath, connection, control
       }
 
       if (result.rejected) totalRejected += result.rejected;
+      if (result.capped) totalCapped += result.capped;
 
       if (!Array.isArray(result.placements) || result.placements.length === 0) {
         continue; // nothing worth noting in this chapter — not a failure
@@ -457,6 +596,7 @@ async function runAllChaptersScope({ editor, getCurrentPath, connection, control
     const detail = joinDetails([
       skipped.length > 0 ? `Skipped ${skipped.length} chapter(s): ${skipped.join('; ')}` : null,
       describeRejected(totalRejected),
+      describeCapped(totalCapped),
     ]);
     return { ok: true, preview: true, previewByFile, inserted: 0, totalPreviewed, detail };
   }
@@ -467,6 +607,7 @@ async function runAllChaptersScope({ editor, getCurrentPath, connection, control
   const detail = joinDetails([
     skipped.length > 0 ? `Skipped ${skipped.length} chapter(s): ${skipped.join('; ')}` : null,
     describeRejected(totalRejected),
+    describeCapped(totalCapped),
     warnings.length > 0 ? `Warning: post-write check flagged ${warnings.length} chapter(s): ${warnings.join(', ')}.` : null,
   ]);
   return { ok: true, runId, inserted: totalInserted, canUndo: totalInserted > 0, detail };
@@ -537,9 +678,10 @@ async function callAiChat({ provider, model, ollamaUrl, systemPrompt, apiKey, ch
 
   // rejected: how many placements lib/ai-proxy.js's resolvePlacements()
   // dropped for landing inside an existing note's marker span (the
-  // pre-write check) — forwarded here so both scope functions above can fold
-  // it into their run summaries.
-  return { ok: true, placements: result.placements, rejected: result.rejected || 0 };
+  // pre-write check). capped: how many capPlacementDensity() trimmed for
+  // exceeding a reasonable notes-per-word ceiling. Both forwarded here so
+  // all three scope functions above can fold them into their run summaries.
+  return { ok: true, placements: result.placements, rejected: result.rejected || 0, capped: result.capped || 0 };
 }
 
 /**

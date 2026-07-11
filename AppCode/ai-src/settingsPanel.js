@@ -28,7 +28,7 @@ import {
   getAgentConfig, setAgentConfig, isAgentConfigLoaded, refreshAgentConfigCache,
   saveModelForProvider, saveOllamaUrl, setActiveKeySlot, setKeySlotLabel, KEY_SLOTS,
 } from './storage.js';
-import { runAgent, cancelAgent, applyPreview, undoLastRun, canUndoLastRun } from './agentRunner.js';
+import { runAgent, cancelAgent, applyPreview, undoLastRun, canUndoLastRun, getEditorSelection } from './agentRunner.js';
 
 // Stage 4: maps agentRunner's status strings to the text shown in the
 // run-status line. Kept as a small lookup rather than inline ternaries so
@@ -51,6 +51,7 @@ const ERROR_KIND_TEXT = {
   'no-key':          'No API key saved for this provider \u2014 add one in Connection above and Save.',
   'no-agent':        'No agent profile selected \u2014 choose one in Agent behaviour above and Save.',
   'no-editor':       'No chapter is open in the editor.',
+  'no-selection':    null, // message from agentRunner ("Highlight a paragraph or two...") is already specific
   'offline':         'Couldn\u2019t reach the server \u2014 check your connection and try again.',
   'empty':           null, // message from agentRunner is already specific enough
   'nothing-usable':  'The model didn\u2019t return anything usable \u2014 try again, or try a different agent profile.',
@@ -196,6 +197,13 @@ export function buildSettingsPanel({ triggerEl, getEditor, getCurrentPath } = {}
         const sel = el('select', { id: 'ai-scope-select' });
         sel.appendChild(el('option', { value: 'chapter', text: 'Current chapter' }));
         sel.appendChild(el('option', { value: 'all', text: 'All chapters' }));
+        // Selection scope: only meaningful when there's actually something
+        // highlighted in the editor right now — disabled (not hidden, so it
+        // stays reachable via keyboard and doesn't shift the option list
+        // around) when there's nothing selected. refreshSelectionOption()
+        // below is what flips `disabled` and updates this option's own
+        // label with a live word count.
+        sel.appendChild(el('option', { value: 'selection', id: 'ai-scope-selection-option', text: 'Selected text', disabled: true }));
         // Stage 5: enabled — agentRunner.js now branches on this
         // (runAllChaptersScope()) instead of always reading the live
         // editor's doc. Was a disabled placeholder through Stage 4.
@@ -274,6 +282,7 @@ export function buildSettingsPanel({ triggerEl, getEditor, getCurrentPath } = {}
   const agentSelect     = promptSection.querySelector('#ai-agent-select');
   const agentPreview    = promptSection.querySelector('#ai-agent-preview');
   const scopeSelect     = scopeSection.querySelector('#ai-scope-select');
+  const scopeSelectionOption = scopeSection.querySelector('#ai-scope-selection-option');
   const scopeTracking   = scopeSection.querySelector('#ai-scope-tracking');
   const modeSelect      = scopeSection.querySelector('#ai-mode-select');
   const saveBtn         = actions.querySelector('#ai-save-config');
@@ -305,9 +314,50 @@ export function buildSettingsPanel({ triggerEl, getEditor, getCurrentPath } = {}
       scopeTracking.textContent = 'Applies to every chapter in the vault (front matter, chapters, back matter).';
       return;
     }
+    if (scopeSelect.value === 'selection') {
+      const selection = typeof getEditor === 'function' ? getEditorSelection(getEditor()) : null;
+      scopeTracking.textContent = selection
+        ? `Tracking: the highlighted text (${wordCount(selection.text)} words).`
+        : 'Tracking: nothing selected \u2014 highlight some text first.';
+      return;
+    }
     scopeTracking.textContent = currentChapterLabel
       ? `Tracking: ${currentChapterLabel}`
       : 'Tracking: no chapter open yet';
+  }
+
+  function wordCount(text) {
+    const trimmed = (text || '').trim();
+    return trimmed ? trimmed.split(/\s+/).length : 0;
+  }
+
+  // Enables/disables the "Selected text" scope option based on whether
+  // there's a live, non-empty selection right now, and updates its label
+  // with a live word count so it's obvious at a glance whether what's
+  // highlighted is "a sentence" or "half the chapter" before running.
+  // Checked at open() time and whenever the scope dropdown itself is
+  // interacted with (see below) — not on every keystroke/selection change
+  // while the drawer is open, since the editor sits behind the drawer and
+  // the person almost always selects text *before* opening the panel, not
+  // while it's open on top of it.
+  function refreshSelectionOption() {
+    const selection = typeof getEditor === 'function' ? getEditorSelection(getEditor()) : null;
+    if (selection) {
+      scopeSelectionOption.disabled = false;
+      scopeSelectionOption.textContent = `Selected text (${wordCount(selection.text)} words)`;
+    } else {
+      scopeSelectionOption.disabled = true;
+      scopeSelectionOption.textContent = 'Selected text';
+      // If selection scope was chosen earlier but the selection has since
+      // been lost (e.g. the person clicked elsewhere in the editor before
+      // opening the panel a second time), fall back to chapter scope rather
+      // than leaving a disabled option selected — a disabled <option> that
+      // is also the current value renders confusingly in most browsers, and
+      // silently running against no selection at all is worse.
+      if (scopeSelect.value === 'selection') {
+        scopeSelect.value = 'chapter';
+      }
+    }
   }
 
   window.addEventListener('mn:chapter-changed', (e) => {
@@ -315,6 +365,12 @@ export function buildSettingsPanel({ triggerEl, getEditor, getCurrentPath } = {}
     renderScopeTracking();
   });
   scopeSelect.addEventListener('change', renderScopeTracking);
+  // Catches the common case of opening the dropdown itself right after
+  // selecting text — re-checks selection state immediately before the
+  // options are shown, so "Selected text" is correctly enabled/labelled
+  // even if it was stale from whenever open() last ran.
+  scopeSelect.addEventListener('mousedown', refreshSelectionOption);
+  scopeSelect.addEventListener('focus', refreshSelectionOption);
 
   // Stage 6 §2: cache of the last-fetched /api/agents list, keyed by
   // `key`, so switching the dropdown's selection can update the preview
@@ -451,6 +507,7 @@ export function buildSettingsPanel({ triggerEl, getEditor, getCurrentPath } = {}
     modeSelect.value = config.mode;
 
     applyProviderVisibility();
+    refreshSelectionOption();
     renderScopeTracking();
     refreshUndoVisibility();
     await loadAgentsList(config.agentKey);

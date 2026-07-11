@@ -1,202 +1,202 @@
-name: Build Android APK
-
-on:
-  workflow_dispatch:
-  push:
-    branches: [main]
-    paths:
-      - 'AppCode/**'
-      - 'mobile/**'
-      - '.github/workflows/build-android-apk.yml'
-
-jobs:
-  cleanup:
-    runs-on: ubuntu-latest
-    permissions:
-      actions: write
-      contents: read
-    steps:
-      # Deletes every past manuscript-debug-apk artifact before this run
-      # builds and uploads a fresh one — so only the newest APK from this
-      # workflow ever sits in storage at a time. Runs on every trigger of
-      # this workflow (no schedule), and only ever touches its own artifact
-      # name, so it never deletes anything belonging to the Electron build.
-      # The new artifact this run is about to upload is left completely
-      # alone by everything here — its lifetime is governed by this repo's
-      # own retention setting (Settings → Actions → General → "Artifact and
-      # log retention"), not by this step.
-      - name: Delete previous manuscript-debug-apk artifacts
-        uses: actions/github-script@v8
-        with:
-          script: |
-            let page = 1;
-            let deleted = 0;
-            while (true) {
-              const { data } = await github.rest.actions.listArtifactsForRepo({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                name: 'manuscript-debug-apk',
-                per_page: 100,
-                page,
-              });
-              if (data.artifacts.length === 0) break;
-              for (const a of data.artifacts) {
-                await github.rest.actions.deleteArtifact({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  artifact_id: a.id,
-                });
-                deleted++;
-              }
-              page++;
-            }
-            console.log(`Deleted ${deleted} previous manuscript-debug-apk artifact(s).`);
-
-  build:
-    needs: cleanup
-    runs-on: ubuntu-latest
-    # GitHub Actions does not allow the `secrets` context inside an `if:`
-    # conditional directly (e.g. `if: secrets.X != ''` is rejected at parse
-    # time, not just at runtime) — it must be passed through `env` first and
-    # checked from there instead. This job-level env var is what the two
-    # signing steps below actually branch on.
-    env:
-      HAS_ANDROID_SIGNING: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' }}
-    steps:
-      - uses: actions/checkout@v5
-
-      - uses: actions/setup-node@v5
-        with:
-          node-version: '20'
-
-      - name: Install AppCode dependencies
-        working-directory: AppCode
-        run: npm install
-
-      - name: Build editor bundle (CodeMirror 6 live-preview editor)
-        working-directory: AppCode
-        run: npm run build:editor
-
-      - name: Install mobile dependencies
-        working-directory: mobile
-        env:
-          ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
-        run: npm install --legacy-peer-deps
-
-      - name: Sync server files & generate node package.json
-        working-directory: mobile
-        run: npm run sync-files
-
-      # Substitutes the __CACHE_VERSION__ placeholder in mobile-sw.js's
-      # bundled output (mobile/www/sw.js, produced by the sync-files step
-      # above) with this run's number — the exact same value used for
-      # versionCode/versionName in the step below. This is what makes the
-      # on-device asset cache invalidate on every build automatically;
-      # see the CACHE_VERSION comment in AppCode/mobile-sw.js for why that
-      # matters. Must run after sync-files (which produces www/sw.js) and
-      # before `cap sync android` (which copies www/ into the Android
-      # project) — the substitution needs to happen exactly once, on the
-      # bundled file that actually ships, not on the AppCode source or a
-      # copy Capacitor has already taken.
-      - name: Inject cache version into service worker
-        working-directory: mobile
-        run: sed -i "s/__CACHE_VERSION__/${{ github.run_number }}/" www/sw.js
-
-      - uses: actions/setup-java@v5
-        with:
-          distribution: 'temurin'
-          java-version: '21'
-
-      - name: Install Android SDK
-        uses: android-actions/setup-android@v4
-
-      - name: Ensure Capacitor Android project exists
-        working-directory: mobile
-        run: |
-          if [ ! -f android/gradlew ]; then
-            npx cap add android
-          else
-            npx cap sync android
-          fi
-
-      - name: Overlay custom app icons
-        run: cp -r mobile/icon-assets/. mobile/android/app/src/main/res/
-
-      # Android only offers an in-place update (no uninstall required) when
-      # the new APK has a HIGHER versionCode than what's installed AND is
-      # signed with the SAME key. Without this step, every CI run left
-      # versionCode at Capacitor's scaffolded default (1), so nothing ever
-      # looked like an "update" to Android no matter how it was signed.
-      # github.run_number always increases build-over-build, so it's a simple
-      # reliable versionCode source — no manual bumping required.
-      - name: Set versionCode/versionName from this run
-        working-directory: mobile/android/app
-        run: |
-          sed -i "s/versionCode [0-9]\+/versionCode ${{ github.run_number }}/" build.gradle
-          sed -i "s/versionName \"[^\"]*\"/versionName \"1.0.${{ github.run_number }}\"/" build.gradle
-          grep -E "versionCode|versionName" build.gradle
-
-      # The other half of "installs as an update, not a fresh app": the APK
-      # must be signed with the SAME key every run. cap add android's
-      # scaffolded debug signing config points at whatever debug.keystore
-      # happens to exist on that runner, which is not persistent across CI
-      # runs — so every build was effectively signed with a different key,
-      # and Android refuses to update-install over a differently-signed app
-      # (silent failure, looks like it needs an uninstall first).
-      #
-      # One-time setup required before this step will work:
-      #   1. Generate a keystore once, locally:
-      #        keytool -genkeypair -v -keystore release.keystore -alias manuscript \
-      #          -keyalg RSA -keysize 2048 -validity 10000
-      #   2. Base64-encode it: base64 -w0 release.keystore > release.keystore.b64
-      #   3. Add these as repo secrets (Settings → Secrets and variables → Actions):
-      #        ANDROID_KEYSTORE_BASE64   — contents of release.keystore.b64
-      #        ANDROID_KEYSTORE_PASSWORD — the keystore password you set above
-      #        ANDROID_KEY_ALIAS         — "manuscript" (or whatever alias you used)
-      #        ANDROID_KEY_PASSWORD      — the key password you set above
-      # Without these secrets set, this step is skipped and the build falls
-      # back to Capacitor's default debug signing — meaning updates will
-      # keep requiring an uninstall until the secrets are added.
-      - name: Write release keystore
-        if: ${{ env.HAS_ANDROID_SIGNING == 'true' }}
-        env:
-          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
-        working-directory: mobile/android/app
-        run: echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > release.keystore
-
-      - name: Configure release signing
-        if: ${{ env.HAS_ANDROID_SIGNING == 'true' }}
-        working-directory: mobile/android/app
-        run: |
-          cat >> build.gradle << 'EOF'
-
-          android {
-              signingConfigs {
-                  release {
-                      storeFile file("release.keystore")
-                      storePassword System.getenv("ANDROID_KEYSTORE_PASSWORD")
-                      keyAlias System.getenv("ANDROID_KEY_ALIAS")
-                      keyPassword System.getenv("ANDROID_KEY_PASSWORD")
-                  }
-              }
-              buildTypes {
-                  debug {
-                      signingConfig signingConfigs.release
-                  }
-              }
-          }
-          EOF
-
-      - name: Build APK
-        working-directory: mobile/android
-        env:
-          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
-        run: ./gradlew assembleDebug
-
-      - name: Upload APK artifact
-        uses: actions/upload-artifact@v6
-        with:
-          name: manuscript-debug-apk
-          path: mobile/android/app/build/outputs/apk/debug/app-debug.apk
+#name: Build Android APK
+#
+#on:
+#  workflow_dispatch:
+#  push:
+#    branches: [main]
+#    paths:
+#      - 'AppCode/**'
+#      - 'mobile/**'
+#      - '.github/workflows/build-android-apk.yml'
+#
+#jobs:
+#  cleanup:
+#    runs-on: ubuntu-latest
+#    permissions:
+#      actions: write
+#      contents: read
+#    steps:
+#      # Deletes every past manuscript-debug-apk artifact before this run
+#      # builds and uploads a fresh one — so only the newest APK from this
+#      # workflow ever sits in storage at a time. Runs on every trigger of
+#      # this workflow (no schedule), and only ever touches its own artifact
+#      # name, so it never deletes anything belonging to the Electron build.
+#      # The new artifact this run is about to upload is left completely
+#      # alone by everything here — its lifetime is governed by this repo's
+#      # own retention setting (Settings → Actions → General → "Artifact and
+#      # log retention"), not by this step.
+#      - name: Delete previous manuscript-debug-apk artifacts
+#        uses: actions/github-script@v8
+#        with:
+#          script: |
+#            let page = 1;
+#            let deleted = 0;
+#            while (true) {
+#              const { data } = await github.rest.actions.listArtifactsForRepo({
+#                owner: context.repo.owner,
+#                repo: context.repo.repo,
+#                name: 'manuscript-debug-apk',
+#                per_page: 100,
+#                page,
+#              });
+#              if (data.artifacts.length === 0) break;
+#              for (const a of data.artifacts) {
+#                await github.rest.actions.deleteArtifact({
+#                  owner: context.repo.owner,
+#                  repo: context.repo.repo,
+#                  artifact_id: a.id,
+#                });
+#                deleted++;
+#              }
+#              page++;
+#            }
+#            console.log(`Deleted ${deleted} previous manuscript-debug-apk artifact(s).`);
+#
+#  build:
+#    needs: cleanup
+#    runs-on: ubuntu-latest
+#    # GitHub Actions does not allow the `secrets` context inside an `if:`
+#    # conditional directly (e.g. `if: secrets.X != ''` is rejected at parse
+#    # time, not just at runtime) — it must be passed through `env` first and
+#    # checked from there instead. This job-level env var is what the two
+#    # signing steps below actually branch on.
+#    env:
+#      HAS_ANDROID_SIGNING: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' }}
+#    steps:
+#      - uses: actions/checkout@v5
+#
+#      - uses: actions/setup-node@v5
+#        with:
+#          node-version: '20'
+#
+#      - name: Install AppCode dependencies
+#        working-directory: AppCode
+#        run: npm install
+#
+#      - name: Build editor bundle (CodeMirror 6 live-preview editor)
+#        working-directory: AppCode
+#        run: npm run build:editor
+#
+#      - name: Install mobile dependencies
+#        working-directory: mobile
+#        env:
+#          ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+#        run: npm install --legacy-peer-deps
+#
+#      - name: Sync server files & generate node package.json
+#        working-directory: mobile
+#        run: npm run sync-files
+#
+#      # Substitutes the __CACHE_VERSION__ placeholder in mobile-sw.js's
+#      # bundled output (mobile/www/sw.js, produced by the sync-files step
+#      # above) with this run's number — the exact same value used for
+#      # versionCode/versionName in the step below. This is what makes the
+#      # on-device asset cache invalidate on every build automatically;
+#      # see the CACHE_VERSION comment in AppCode/mobile-sw.js for why that
+#      # matters. Must run after sync-files (which produces www/sw.js) and
+#      # before `cap sync android` (which copies www/ into the Android
+#      # project) — the substitution needs to happen exactly once, on the
+#      # bundled file that actually ships, not on the AppCode source or a
+#      # copy Capacitor has already taken.
+#      - name: Inject cache version into service worker
+#        working-directory: mobile
+#        run: sed -i "s/__CACHE_VERSION__/${{ github.run_number }}/" www/sw.js
+#
+#      - uses: actions/setup-java@v5
+#        with:
+#          distribution: 'temurin'
+#          java-version: '21'
+#
+#      - name: Install Android SDK
+#        uses: android-actions/setup-android@v4
+#
+#      - name: Ensure Capacitor Android project exists
+#        working-directory: mobile
+#        run: |
+#          if [ ! -f android/gradlew ]; then
+#            npx cap add android
+#          else
+#            npx cap sync android
+#          fi
+#
+#      - name: Overlay custom app icons
+#        run: cp -r mobile/icon-assets/. mobile/android/app/src/main/res/
+#
+#      # Android only offers an in-place update (no uninstall required) when
+#      # the new APK has a HIGHER versionCode than what's installed AND is
+#      # signed with the SAME key. Without this step, every CI run left
+#      # versionCode at Capacitor's scaffolded default (1), so nothing ever
+#      # looked like an "update" to Android no matter how it was signed.
+#      # github.run_number always increases build-over-build, so it's a simple
+#      # reliable versionCode source — no manual bumping required.
+#      - name: Set versionCode/versionName from this run
+#        working-directory: mobile/android/app
+#        run: |
+#          sed -i "s/versionCode [0-9]\+/versionCode ${{ github.run_number }}/" build.gradle
+#          sed -i "s/versionName \"[^\"]*\"/versionName \"1.0.${{ github.run_number }}\"/" build.gradle
+#          grep -E "versionCode|versionName" build.gradle
+#
+#      # The other half of "installs as an update, not a fresh app": the APK
+#      # must be signed with the SAME key every run. cap add android's
+#      # scaffolded debug signing config points at whatever debug.keystore
+#      # happens to exist on that runner, which is not persistent across CI
+#      # runs — so every build was effectively signed with a different key,
+#      # and Android refuses to update-install over a differently-signed app
+#      # (silent failure, looks like it needs an uninstall first).
+#      #
+#      # One-time setup required before this step will work:
+#      #   1. Generate a keystore once, locally:
+#      #        keytool -genkeypair -v -keystore release.keystore -alias manuscript \
+#      #          -keyalg RSA -keysize 2048 -validity 10000
+#      #   2. Base64-encode it: base64 -w0 release.keystore > release.keystore.b64
+#      #   3. Add these as repo secrets (Settings → Secrets and variables → Actions):
+#      #        ANDROID_KEYSTORE_BASE64   — contents of release.keystore.b64
+#      #        ANDROID_KEYSTORE_PASSWORD — the keystore password you set above
+#      #        ANDROID_KEY_ALIAS         — "manuscript" (or whatever alias you used)
+#      #        ANDROID_KEY_PASSWORD      — the key password you set above
+#      # Without these secrets set, this step is skipped and the build falls
+#      # back to Capacitor's default debug signing — meaning updates will
+#      # keep requiring an uninstall until the secrets are added.
+#      - name: Write release keystore
+#        if: ${{ env.HAS_ANDROID_SIGNING == 'true' }}
+#        env:
+#          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+#        working-directory: mobile/android/app
+#        run: echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > release.keystore
+#
+#      - name: Configure release signing
+#        if: ${{ env.HAS_ANDROID_SIGNING == 'true' }}
+#        working-directory: mobile/android/app
+#        run: |
+#          cat >> build.gradle << 'EOF'
+#
+#          android {
+#              signingConfigs {
+#                  release {
+#                      storeFile file("release.keystore")
+#                      storePassword System.getenv("ANDROID_KEYSTORE_PASSWORD")
+#                      keyAlias System.getenv("ANDROID_KEY_ALIAS")
+#                      keyPassword System.getenv("ANDROID_KEY_PASSWORD")
+#                  }
+#              }
+#              buildTypes {
+#                  debug {
+#                      signingConfig signingConfigs.release
+#                  }
+#              }
+#          }
+#          EOF
+#
+#      - name: Build APK
+#        working-directory: mobile/android
+#        env:
+#          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+#          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+#          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+#        run: ./gradlew assembleDebug
+#
+#      - name: Upload APK artifact
+#        uses: actions/upload-artifact@v6
+#        with:
+#          name: manuscript-debug-apk
+#          path: mobile/android/app/build/outputs/apk/debug/app-debug.apk

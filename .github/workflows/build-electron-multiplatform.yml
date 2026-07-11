@@ -1,235 +1,235 @@
-name: Build Electron Multiplatform App
-
-on:
-  workflow_dispatch:
-  push:
-    branches: [main]
-    paths:
-      - 'AppCode/**'
-      - 'electron/**'
-      - '.github/workflows/build-electron-multiplatform.yml'
-
-jobs:
-  cleanup:
-    runs-on: ubuntu-latest
-    permissions:
-      actions: write
-      contents: read
-    strategy:
-      matrix:
-        # One cleanup pass per artifact NAME, not per OS — each package type
-        # gets its own artifact (see the upload steps below), so there are
-        # more artifact names than platforms. Every previous run's artifacts
-        # under each of these names are deleted before this run's build
-        # uploads a fresh one, same intentional single-latest-copy policy as
-        # the Android workflow. This never touches manuscript-debug-apk.
-        artifact_name:
-          - manuscript-linux-deb
-          - manuscript-linux-appimage
-          - manuscript-windows-exe
-          - manuscript-macos-dmg
-          - manuscript-macos-zip
-    steps:
-      - name: Delete previous ${{ matrix.artifact_name }} artifacts
-        uses: actions/github-script@v8
-        with:
-          script: |
-            let page = 1;
-            let deleted = 0;
-            const targetName = '${{ matrix.artifact_name }}';
-            while (true) {
-              const { data } = await github.rest.actions.listArtifactsForRepo({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                name: targetName,
-                per_page: 100,
-                page,
-              });
-              if (data.artifacts.length === 0) break;
-              for (const a of data.artifacts) {
-                await github.rest.actions.deleteArtifact({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  artifact_id: a.id,
-                });
-                deleted++;
-              }
-              page++;
-            }
-            console.log(`Deleted ${deleted} previous ${targetName} artifact(s).`);
-
-  build:
-    needs: cleanup
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
-        include:
-          - os: ubuntu-latest
-            platform: linux
-            build-cmd: npm run dist:linux
-          - os: windows-latest
-            platform: windows
-            build-cmd: npm run dist:win
-          - os: macos-latest
-            platform: macos
-            build-cmd: npm run dist:mac
-    runs-on: ${{ matrix.os }}
-    steps:
-      - uses: actions/checkout@v5
-
-      - uses: actions/setup-node@v5
-        with:
-          node-version: '20'
-
-      - name: Install AppCode dependencies
-        working-directory: AppCode
-        env:
-          PUPPETEER_SKIP_DOWNLOAD: '1'
-        run: npm install
-
-      - name: Build editor bundle (CodeMirror 6 live-preview editor)
-        working-directory: AppCode
-        run: npm run build:editor
-
-      - name: Build AI bundle (agent-authored note splicing)
-        working-directory: AppCode
-        run: npm run build:ai
-
-      - name: Install AppCode production dependencies (bundled into the app)
-        working-directory: AppCode
-        env:
-          PUPPETEER_SKIP_DOWNLOAD: '1'
-        run: npm install --omit=dev
-
-      # Linux-specific tools installation. dist:linux only targets
-      # deb + AppImage (see electron/package.json's build.linux.target and
-      # the two separate upload steps below) — neither format needs rpm, so
-      # this step is intentionally gone rather than carried over dead.
-
-      # Multi-platform Python icon generation block
-      - name: Ensure app icon set exists (Linux/Mac)
-        if: matrix.os != 'windows-latest'
-        # Both `pip install pillow` and `python3 -m pip install pillow`
-        # depend on the runner's system Python not being "externally
-        # managed" (PEP 668). ubuntu-latest's system python3 tolerates
-        # --break-system-packages; macos-latest's Homebrew python3 is
-        # externally-managed too but can reject even that flag depending on
-        # the image, which is why this step only fails on Mac. A venv sits
-        # outside that restriction entirely on every OS, so it's used here
-        # instead of relying on either flag to work.
-        run: |
-          if [ ! -f electron/build-resources/icon.png ] || [ -z "$(ls -A electron/build-resources/icons 2>/dev/null)" ]; then
-            python3 -m venv /tmp/icon-venv
-            /tmp/icon-venv/bin/pip install --quiet pillow
-            /tmp/icon-venv/bin/python3 electron/build-resources/generate-icons.py
-          fi
-
-      - name: Ensure app icon set exists (Windows)
-        if: matrix.os == 'windows-latest'
-        shell: powershell
-        # Same fix as the Linux/Mac step: use `python -m pip` so pillow
-        # installs into the exact interpreter that runs the script, rather
-        # than trusting a bare `pip` to resolve to the same one `python` does.
-        run: |
-          if (!(Test-Path electron/build-resources/icon.png) -or !(Get-ChildItem electron/build-resources/icons -ErrorAction SilentlyContinue)) {
-            python -m pip install --quiet pillow
-            python electron/build-resources/generate-icons.py
-          }
-
-      - name: Install Electron dependencies
-        working-directory: electron
-        run: npm install
-
-      # Sets version dynamically using universal node command cross-platform
-      - name: Set package version from this run
-        working-directory: electron
-        run: npm version "1.0.${{ github.run_number }}" --no-git-tag-version --allow-same-version
-
-      - name: Build Electron App Package
-        working-directory: electron
-        run: ${{ matrix.build-cmd }}
-        env:
-          # No paid Apple/Windows signing cert wired up yet, so auto-discovery
-          # is explicitly disabled rather than left to fail unpredictably
-          # mid-build looking for a cert that isn't there. This is why the
-          # macOS .dmg/.zip trip Gatekeeper's "unidentified developer" block
-          # and the Windows .exe trips SmartScreen on other machines — see
-          # the signing notes below and in the Android workflow.
-          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
-
-      # Each package type is uploaded as its own artifact instead of one
-      # combined bundle, so anyone downloading from the Actions run page only
-      # pulls the single file/format they actually want (e.g. just the
-      # .dmg, not a zip containing the .dmg + .exe + .deb + AppImage they'll
-      # never use) — this is what makes each artifact "individually
-      # downloadable" rather than one slow combined download.
-      - name: Upload Linux .deb artifact
-        if: matrix.platform == 'linux'
-        uses: actions/upload-artifact@v6
-        with:
-          name: manuscript-linux-deb
-          path: electron/dist/*.deb
-
-      - name: Upload Linux AppImage artifact
-        if: matrix.platform == 'linux'
-        uses: actions/upload-artifact@v6
-        with:
-          name: manuscript-linux-appimage
-          path: electron/dist/*.AppImage
-
-      - name: Upload Windows .exe artifact
-        if: matrix.platform == 'windows'
-        uses: actions/upload-artifact@v6
-        with:
-          name: manuscript-windows-exe
-          path: electron/dist/*.exe
-
-      - name: Upload macOS .dmg artifact
-        if: matrix.platform == 'macos'
-        uses: actions/upload-artifact@v6
-        with:
-          name: manuscript-macos-dmg
-          path: electron/dist/*.dmg
-
-      - name: Upload macOS .zip artifact
-        if: matrix.platform == 'macos'
-        uses: actions/upload-artifact@v6
-        with:
-          name: manuscript-macos-zip
-          path: electron/dist/*.zip
-
-# ── Signing / "unidentified developer" notes ──────────────────────────────
+#name: Build Electron Multiplatform App
 #
-# Android (the one that matters right now):
-#   build-android-apk.yml already has the fix wired up — see the comments
-#   there. Short version: without the ANDROID_KEYSTORE_BASE64 etc. secrets,
-#   the app builds with Capacitor's throwaway debug keystore, which is a
-#   DIFFERENT key every CI run. Android refuses to install an update over an
-#   app signed with a different key than what's already on the device, so
-#   every install looks like it needs an uninstall first. Add the four repo
-#   secrets described in that workflow's comments once, and every future
-#   build is signed consistently, so updates install in place. This is the
-#   one worth doing now because you're presumably installing/updating this
-#   APK on your own device regularly during development.
+#on:
+#  workflow_dispatch:
+#  push:
+#    branches: [main]
+#    paths:
+#      - 'AppCode/**'
+#      - 'electron/**'
+#      - '.github/workflows/build-electron-multiplatform.yml'
 #
-# Windows / macOS (real, but lower priority for now):
-#   CSC_IDENTITY_AUTO_DISCOVERY: 'false' above deliberately turns off
-#   electron-builder's auto code-signing, because there's no paid cert
-#   configured. Effect on each platform:
-#     - macOS: the .dmg is unsigned and not notarized, so Gatekeeper blocks
-#       it on any Mac that isn't yours with "Apple could not verify this app
-#       is free of malware" (the "unidentified developer" dialog). Anyone
-#       else has to right-click → Open → confirm, every first launch.
-#     - Windows: the .exe is unsigned, so SmartScreen shows "Windows
-#       protected your PC" on first run elsewhere. A user can click
-#       "More info" → "Run anyway" to get past it.
-#   Both are cosmetic/trust-warning issues, not build failures — the
-#   workflow succeeds and produces a working installer either way. Fixing
-#   them for real means buying a certificate (an Apple Developer Program
-#   membership, ~$99/yr, for notarization; a Windows code-signing cert from
-#   a CA, roughly $70-400/yr) and wiring the cert + credentials into this
-#   workflow via secrets (CSC_LINK/CSC_KEY_PASSWORD for electron-builder,
-#   plus Apple ID + app-specific password for notarization). Worth doing
-#   before distributing to people other than yourself, but not urgent for
-#   solo/local use the way the Android signing issue is.
+#jobs:
+#  cleanup:
+#    runs-on: ubuntu-latest
+#    permissions:
+#      actions: write
+#      contents: read
+#    strategy:
+#      matrix:
+#        # One cleanup pass per artifact NAME, not per OS — each package type
+#        # gets its own artifact (see the upload steps below), so there are
+#        # more artifact names than platforms. Every previous run's artifacts
+#        # under each of these names are deleted before this run's build
+#        # uploads a fresh one, same intentional single-latest-copy policy as
+#        # the Android workflow. This never touches manuscript-debug-apk.
+#        artifact_name:
+#          - manuscript-linux-deb
+#          - manuscript-linux-appimage
+#          - manuscript-windows-exe
+#          - manuscript-macos-dmg
+#          - manuscript-macos-zip
+#    steps:
+#      - name: Delete previous ${{ matrix.artifact_name }} artifacts
+#        uses: actions/github-script@v8
+#        with:
+#          script: |
+#            let page = 1;
+#            let deleted = 0;
+#            const targetName = '${{ matrix.artifact_name }}';
+#            while (true) {
+#              const { data } = await github.rest.actions.listArtifactsForRepo({
+#                owner: context.repo.owner,
+#                repo: context.repo.repo,
+#                name: targetName,
+#                per_page: 100,
+#                page,
+#              });
+#              if (data.artifacts.length === 0) break;
+#              for (const a of data.artifacts) {
+#                await github.rest.actions.deleteArtifact({
+#                  owner: context.repo.owner,
+#                  repo: context.repo.repo,
+#                  artifact_id: a.id,
+#                });
+#                deleted++;
+#              }
+#              page++;
+#            }
+#            console.log(`Deleted ${deleted} previous ${targetName} artifact(s).`);
+#
+#  build:
+#    needs: cleanup
+#    strategy:
+#      fail-fast: false
+#      matrix:
+#        os: [ubuntu-latest, windows-latest, macos-latest]
+#        include:
+#          - os: ubuntu-latest
+#            platform: linux
+#            build-cmd: npm run dist:linux
+#          - os: windows-latest
+#            platform: windows
+#            build-cmd: npm run dist:win
+#          - os: macos-latest
+#            platform: macos
+#            build-cmd: npm run dist:mac
+#    runs-on: ${{ matrix.os }}
+#    steps:
+#      - uses: actions/checkout@v5
+#
+#      - uses: actions/setup-node@v5
+#        with:
+#          node-version: '20'
+#
+#      - name: Install AppCode dependencies
+#        working-directory: AppCode
+#        env:
+#          PUPPETEER_SKIP_DOWNLOAD: '1'
+#        run: npm install
+#
+#      - name: Build editor bundle (CodeMirror 6 live-preview editor)
+#        working-directory: AppCode
+#        run: npm run build:editor
+#
+#      - name: Build AI bundle (agent-authored note splicing)
+#        working-directory: AppCode
+#        run: npm run build:ai
+#
+#      - name: Install AppCode production dependencies (bundled into the app)
+#        working-directory: AppCode
+#        env:
+#          PUPPETEER_SKIP_DOWNLOAD: '1'
+#        run: npm install --omit=dev
+#
+#      # Linux-specific tools installation. dist:linux only targets
+#      # deb + AppImage (see electron/package.json's build.linux.target and
+#      # the two separate upload steps below) — neither format needs rpm, so
+#      # this step is intentionally gone rather than carried over dead.
+#
+#      # Multi-platform Python icon generation block
+#      - name: Ensure app icon set exists (Linux/Mac)
+#        if: matrix.os != 'windows-latest'
+#        # Both `pip install pillow` and `python3 -m pip install pillow`
+#        # depend on the runner's system Python not being "externally
+#        # managed" (PEP 668). ubuntu-latest's system python3 tolerates
+#        # --break-system-packages; macos-latest's Homebrew python3 is
+#        # externally-managed too but can reject even that flag depending on
+#        # the image, which is why this step only fails on Mac. A venv sits
+#        # outside that restriction entirely on every OS, so it's used here
+#        # instead of relying on either flag to work.
+#        run: |
+#          if [ ! -f electron/build-resources/icon.png ] || [ -z "$(ls -A electron/build-resources/icons 2>/dev/null)" ]; then
+#            python3 -m venv /tmp/icon-venv
+#            /tmp/icon-venv/bin/pip install --quiet pillow
+#            /tmp/icon-venv/bin/python3 electron/build-resources/generate-icons.py
+#          fi
+#
+#      - name: Ensure app icon set exists (Windows)
+#        if: matrix.os == 'windows-latest'
+#        shell: powershell
+#        # Same fix as the Linux/Mac step: use `python -m pip` so pillow
+#        # installs into the exact interpreter that runs the script, rather
+#        # than trusting a bare `pip` to resolve to the same one `python` does.
+#        run: |
+#          if (!(Test-Path electron/build-resources/icon.png) -or !(Get-ChildItem electron/build-resources/icons -ErrorAction SilentlyContinue)) {
+#            python -m pip install --quiet pillow
+#            python electron/build-resources/generate-icons.py
+#          }
+#
+#      - name: Install Electron dependencies
+#        working-directory: electron
+#        run: npm install
+#
+#      # Sets version dynamically using universal node command cross-platform
+#      - name: Set package version from this run
+#        working-directory: electron
+#        run: npm version "1.0.${{ github.run_number }}" --no-git-tag-version --allow-same-version
+#
+#      - name: Build Electron App Package
+#        working-directory: electron
+#        run: ${{ matrix.build-cmd }}
+#        env:
+#          # No paid Apple/Windows signing cert wired up yet, so auto-discovery
+#          # is explicitly disabled rather than left to fail unpredictably
+#          # mid-build looking for a cert that isn't there. This is why the
+#          # macOS .dmg/.zip trip Gatekeeper's "unidentified developer" block
+#          # and the Windows .exe trips SmartScreen on other machines — see
+#          # the signing notes below and in the Android workflow.
+#          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+#
+#      # Each package type is uploaded as its own artifact instead of one
+#      # combined bundle, so anyone downloading from the Actions run page only
+#      # pulls the single file/format they actually want (e.g. just the
+#      # .dmg, not a zip containing the .dmg + .exe + .deb + AppImage they'll
+#      # never use) — this is what makes each artifact "individually
+#      # downloadable" rather than one slow combined download.
+#      - name: Upload Linux .deb artifact
+#        if: matrix.platform == 'linux'
+#        uses: actions/upload-artifact@v6
+#        with:
+#          name: manuscript-linux-deb
+#          path: electron/dist/*.deb
+#
+#      - name: Upload Linux AppImage artifact
+#        if: matrix.platform == 'linux'
+#        uses: actions/upload-artifact@v6
+#        with:
+#          name: manuscript-linux-appimage
+#          path: electron/dist/*.AppImage
+#
+#      - name: Upload Windows .exe artifact
+#        if: matrix.platform == 'windows'
+#        uses: actions/upload-artifact@v6
+#        with:
+#          name: manuscript-windows-exe
+#          path: electron/dist/*.exe
+#
+#      - name: Upload macOS .dmg artifact
+#        if: matrix.platform == 'macos'
+#        uses: actions/upload-artifact@v6
+#        with:
+#          name: manuscript-macos-dmg
+#          path: electron/dist/*.dmg
+#
+#      - name: Upload macOS .zip artifact
+#        if: matrix.platform == 'macos'
+#        uses: actions/upload-artifact@v6
+#        with:
+#          name: manuscript-macos-zip
+#          path: electron/dist/*.zip
+#
+## ── Signing / "unidentified developer" notes ──────────────────────────────
+##
+## Android (the one that matters right now):
+##   build-android-apk.yml already has the fix wired up — see the comments
+##   there. Short version: without the ANDROID_KEYSTORE_BASE64 etc. secrets,
+##   the app builds with Capacitor's throwaway debug keystore, which is a
+##   DIFFERENT key every CI run. Android refuses to install an update over an
+##   app signed with a different key than what's already on the device, so
+##   every install looks like it needs an uninstall first. Add the four repo
+##   secrets described in that workflow's comments once, and every future
+##   build is signed consistently, so updates install in place. This is the
+##   one worth doing now because you're presumably installing/updating this
+##   APK on your own device regularly during development.
+##
+## Windows / macOS (real, but lower priority for now):
+##   CSC_IDENTITY_AUTO_DISCOVERY: 'false' above deliberately turns off
+##   electron-builder's auto code-signing, because there's no paid cert
+##   configured. Effect on each platform:
+##     - macOS: the .dmg is unsigned and not notarized, so Gatekeeper blocks
+##       it on any Mac that isn't yours with "Apple could not verify this app
+##       is free of malware" (the "unidentified developer" dialog). Anyone
+##       else has to right-click → Open → confirm, every first launch.
+##     - Windows: the .exe is unsigned, so SmartScreen shows "Windows
+##       protected your PC" on first run elsewhere. A user can click
+##       "More info" → "Run anyway" to get past it.
+##   Both are cosmetic/trust-warning issues, not build failures — the
+##   workflow succeeds and produces a working installer either way. Fixing
+##   them for real means buying a certificate (an Apple Developer Program
+##   membership, ~$99/yr, for notarization; a Windows code-signing cert from
+##   a CA, roughly $70-400/yr) and wiring the cert + credentials into this
+##   workflow via secrets (CSC_LINK/CSC_KEY_PASSWORD for electron-builder,
+##   plus Apple ID + app-specific password for notarization). Worth doing
+##   before distributing to people other than yourself, but not urgent for
+##   solo/local use the way the Android signing issue is.
