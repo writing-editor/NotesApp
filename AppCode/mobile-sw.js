@@ -30,8 +30,8 @@ const BOOK_PREFIX = 'book/';
 // the literal bytes, not the escaped form.
 
 // ── Service Worker asset caching ────────────────────────────────────────
-// CACHE_NAME must change any time client.js, index.html, styles.css, or
-// mn-editor.bundle.js changes. Caches are keyed by this name, not by file
+// CACHE_NAME must change any time client.js, index.html, styles.css,
+// markdown-typography.css, or mn-editor.bundle.js changes. Caches are keyed by this name, not by file
 // content — as long as the name stays the same, caches.match() below keeps
 // returning whatever was cached under that name the very first time this
 // service worker ever ran on a given device, no matter what's since been
@@ -52,7 +52,7 @@ const BOOK_PREFIX = 'book/';
 // running server and not relying on a stale on-device cache anyway.
 const CACHE_VERSION = '__CACHE_VERSION__'.startsWith('__') ? 'dev' : '__CACHE_VERSION__';
 const CACHE_NAME = `manuscript-mobile-${CACHE_VERSION}`;
-const STATIC_ASSETS = ['/', '/index.html', '/styles.css', '/client.js', '/mn-editor.bundle.js'];
+const STATIC_ASSETS = ['/', '/index.html', '/styles.css', '/markdown-typography.css', '/client.js', '/mn-editor.bundle.js'];
 
 self.addEventListener('install', (e) => {
   self.skipWaiting();

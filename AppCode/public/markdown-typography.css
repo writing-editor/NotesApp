@@ -1,0 +1,150 @@
+/* markdown-typography.css
+ *
+ * Visual rules for the CM6 live-preview markdown editor's syntax-tree
+ * classes (see editor-src/livePreview.js's markdownHighlightStyle, which
+ * assigns these .cm-md-* classes via @codemirror/language's
+ * syntaxHighlighting() — the standard tag-to-class mechanism, not a
+ * hand-rolled per-feature ruleset).
+ *
+ * Deliberately kept OUT of styles.css: styles.css is already large and
+ * covers app chrome/layout/notes/margin-column etc. This file only ever
+ * touches how markdown constructs (headings, bold, italic, code, links,
+ * quotes, lists, hr) look inside .main-text's editor, so it's safe to
+ * iterate on in isolation — e.g. swapping heading scale or list-marker
+ * styling without hunting through the rest of the app's CSS.
+ *
+ * Uses the same --ink/--accent/--font-* custom properties defined at the
+ * top of styles.css so headings etc. stay visually consistent with the
+ * rest of the app. This file must be loaded AFTER styles.css (see
+ * index.html) so those variables are already defined when this file's
+ * rules reference them — plain CSS custom property inheritance, nothing
+ * that depends on load order for anything else.
+ *
+ * Pure CSS, no JS, no platform-specific code — renders identically in the
+ * desktop browser and in the mobile WebView/service-worker-served build.
+ */
+
+/* ── Headings ────────────────────────────────────────────────────────── */
+.main-text .cm-md-h1,
+.main-text .cm-md-h2,
+.main-text .cm-md-h3,
+.main-text .cm-md-h4,
+.main-text .cm-md-h5,
+.main-text .cm-md-h6 {
+  font-family: var(--font-ui);
+  font-weight: 400;
+  color: var(--accent);
+}
+
+.main-text .cm-md-h1 {
+  font-size: 2.1rem;
+  color: var(--accent-h1);
+  letter-spacing: 0.02em;
+}
+
+.main-text .cm-md-h2 {
+  font-size: 1.8rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.main-text .cm-md-h3 {
+  font-size: 1.4rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.main-text .cm-md-h4 {
+  font-size: 1.15rem;
+  letter-spacing: 0.06em;
+}
+
+.main-text .cm-md-h5,
+.main-text .cm-md-h6 {
+  font-size: 1.05rem;
+  letter-spacing: 0.04em;
+  color: var(--ink-light);
+}
+
+/* ── Emphasis ────────────────────────────────────────────────────────── */
+.main-text .cm-md-strong {
+  font-weight: 600;
+}
+
+.main-text .cm-md-em {
+  font-style: italic;
+}
+
+.main-text .cm-md-strike {
+  text-decoration: line-through;
+  color: var(--ink-faint);
+}
+
+/* ── Inline code ─────────────────────────────────────────────────────── */
+.main-text .cm-md-code {
+  font-family: var(--font-ui);
+  font-size: 0.9em;
+  background: var(--paper-warm);
+  border: 1px solid var(--rule);
+  border-radius: 3px;
+  padding: 0.05em 0.35em;
+}
+
+/* ── Links ───────────────────────────────────────────────────────────── */
+.main-text .cm-md-link {
+  color: var(--accent);
+  text-decoration: underline;
+  text-decoration-color: var(--rule);
+}
+
+.main-text .cm-md-url {
+  color: var(--ink-faint);
+}
+
+/* ── Blockquotes ─────────────────────────────────────────────────────── */
+/* .cm-md-quote-line is applied to the whole line by
+ * editor-src/livePreview.js's quoteLineHighlighting plugin (a CM6 line
+ * decoration), not by a CSS :has() selector — :has() isn't reliable across
+ * every mobile WebView this app has to run in, so the line is tagged in
+ * JS instead and styled here with a plain class selector. */
+.main-text .cm-md-quote-line {
+  border-left: 3px solid var(--rule);
+  padding-left: 0.75em;
+  color: var(--ink-light);
+  font-style: italic;
+}
+
+/* ── Lists ───────────────────────────────────────────────────────────── */
+/* .cm-md-list-mark targets ONLY the bullet/number glyph itself (the
+ * ListMark node's own range — see editor-src/livePreview.js's
+ * listMarkHighlighting), never the item's body text. An earlier version
+ * of this file used @lezer/markdown's `list` highlight tag directly, but
+ * that tag covers the ENTIRE list (every item's full text), so styling it
+ * bolded/coloured the whole list body instead of just the marker — this
+ * class is the corrected, marker-only equivalent. */
+.main-text .cm-md-list-mark {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+/* Thematic break (---) */
+.main-text .cm-md-hr {
+  color: var(--rule);
+  letter-spacing: 0.2em;
+}
+
+/* ── Task list checkboxes ────────────────────────────────────────────── */
+/* .cm-md-task-marker targets the TaskMarker node ([ ] / [x]) via the
+ * `tags.atom` mapping in editor-src/livePreview.js's markdownHighlightStyle
+ * — the same tag-to-class mechanism as every other rule in this file, not
+ * a guessed CodeMirror built-in class name. TaskMarker is deliberately NOT
+ * hidden by live-preview (see livePreview.js's comment on MARK_NODE_NAMES)
+ * since it's the checkbox's own visible UI, not decorative syntax, so it
+ * always needs some styling rather than inheriting plain paragraph text.
+ * Kept intentionally minimal (monospace, dimmed) rather than a fully
+ * custom checkbox widget — that would need its own decoration/click
+ * handling, out of scope for this pass. */
+.main-text .cm-md-task-marker {
+  font-family: var(--font-ui);
+  color: var(--ink-faint);
+}

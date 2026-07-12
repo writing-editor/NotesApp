@@ -6,9 +6,10 @@ import { EditorState } from '@codemirror/state';
 import { EditorView, keymap, drawSelection, dropCursor } from '@codemirror/view';
 import { defaultKeymap, history, historyKeymap } from '@codemirror/commands';
 import { markdown } from '@codemirror/lang-markdown';
+import { GFM } from '@lezer/markdown';
 import { languages } from '@codemirror/language-data'; // fenced code block highlighting, optional but small
 
-import { livePreviewMarks } from './livePreview.js';
+import { livePreviewMarks, markdownTypography, quoteLineHighlighting, listMarkHighlighting } from './livePreview.js';
 import { noteMarkerWidgets, findNoteMarkers } from './noteWidgets.js';
 import { marginBridge } from './marginSync.js';
 import { paragraphGutter } from './paragraphGutter.js';
@@ -78,7 +79,10 @@ export function createLiveEditor({
         drawSelection(), // normalizes caret/selection rendering across mobile WebViews
         dropCursor(),
         keymap.of([...defaultKeymap, ...historyKeymap]),
-        markdown({ codeLanguages: languages }),
+        markdown({ codeLanguages: languages, extensions: GFM }),
+        markdownTypography,
+        quoteLineHighlighting,
+        listMarkHighlighting,
         livePreviewMarks,
         noteMarkerWidgets,
         marginBridge({ onNotesChanged, onLayoutChanged }),

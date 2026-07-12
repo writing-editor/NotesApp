@@ -12,6 +12,7 @@ const STATIC_ASSETS = [
   '/',
   '/index.html',
   '/styles.css',
+  '/markdown-typography.css',
   '/client.js',
   // Google Fonts are cached on first fetch via the network-first handler below
 ];

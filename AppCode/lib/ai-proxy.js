@@ -68,6 +68,16 @@ const { splitIntoParagraphs } = require('./paragraphs');
 // needs; the two are kept in sync by using the identical regex literal.
 const MN_MARKER_RE = /\[mn(?:\.(\w+))?\s*:\s*([\s\S]*?)\]/g;
 
+// Separate literal (same pattern as MN_MARKER_RE, no shared lastIndex
+// state) used only to strip markers out of the text shown to the model —
+// see buildPrompt()'s displayText() below. Kept distinct from
+// MN_MARKER_RE/findExistingNoteSpans, which manually drive `exec()` in a
+// loop and rely on that regex's own `.lastIndex`; `String.replace()` with a
+// `/g` regex resets lastIndex itself each call, but giving stripping its
+// own literal avoids any risk of the two use sites interfering if either
+// one's calling convention changes later.
+const MN_MARKER_RE_G = /\[mn(?:\.(\w+))?\s*:\s*([\s\S]*?)\]/g;
+
 function findExistingNoteSpans(text) {
   const spans = [];
   if (typeof text !== 'string' || !text) return spans;
@@ -213,7 +223,31 @@ function resolveParagraphPlacements(rawPlacements, paragraphs, existingSpans) {
 // problem with a separate fix.
 function buildPrompt({ systemPrompt, chapterText }) {
   const paragraphs = splitIntoParagraphs(chapterText);
+
+  // Strip existing `[mn: ...]` / `[mn.type: ...]` note markers out of the
+  // text shown to the model entirely, rather than leaving them in and
+  // relying on an instruction to ignore them. This is stronger than an
+  // instruction: the model literally never sees them, so it can't quote,
+  // reference, second-guess, or nest a new note around one — the class of
+  // bug where a returned note ends up wrapping or duplicating an existing
+  // marker traced back to the marker being present in the model's input at
+  // all, not to the model failing to follow a "please disregard" rule.
+  //
+  // This only changes what's DISPLAYED to the model (`p.text` below, used
+  // to build `numberedText`) — it must NOT touch `paragraphs` itself.
+  // `paragraphs[].start`/`.end` are real byte offsets into the actual,
+  // unmodified chapterText, and resolveParagraphPlacements() below looks
+  // up a returned paragraphId's charPos from those same untouched offsets.
+  // If markers were stripped from chapterText before splitIntoParagraphs()
+  // ran, every offset after the first stripped marker would shift left of
+  // where that text actually sits in the real document, and every note
+  // placed by paragraph id after that point would land in the wrong spot.
+  // Stripping only the display copy, per-paragraph, keeps the offsets the
+  // rest of the pipeline depends on completely unaffected.
+  const displayText = (text) => text.replace(MN_MARKER_RE_G, '').trim();
   const numberedText = paragraphs
+    .map((p) => ({ id: p.id, text: displayText(p.text) }))
+    .filter((p) => p.text) // a paragraph that was ONLY a note marker strips to empty — omit it rather than showing the model a pointless empty [Pn] tag it could still (uselessly) try to flag
     .map((p) => `[${p.id}] ${p.text}`)
     .join('\n\n');
 
