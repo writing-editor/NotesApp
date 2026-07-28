@@ -134,15 +134,53 @@ function extractJsonArray(rawText) {
   return parsed;
 }
 
+// ── Anchor-phrase resolution ─────────────────────────────────────────────
+//
+// The model is additionally asked for a short `anchor` — 2 to 4 words
+// copied VERBATIM from somewhere inside the paragraph it named, at the
+// point the note should attach to. This is still not a coordinate: the
+// model never gives us a number. It's one more piece of text, and the app
+// re-derives the real position itself by doing a plain, exact substring
+// search for that phrase inside the paragraph's own real text (the same
+// `paragraph.text` splitIntoParagraphs() already sliced out of the actual
+// document) — never trusting anything the model says about *where* that
+// phrase sits.
+//
+// If the phrase is found, the note lands right after it (i.e. at the end
+// of the match) — that reads as "attached to what was just said" rather
+// than interrupting mid-phrase. If it's not found (model paraphrased
+// instead of quoting, or invented text that isn't actually there), this
+// falls back to the paragraph's start — exactly today's behaviour — so a
+// bad anchor degrades to the old, safe placement rather than doing
+// anything more elaborate like a fuzzy match, which would reintroduce the
+// exact "trust the model's guess about position" problem this design
+// avoids.
+//
+// Deliberately case-sensitive/exact (String.prototype.indexOf), not a
+// fuzzy or case-insensitive match: the whole safety property here is that
+// a hit means the phrase is provably, verbatim present in the real
+// document text at a real offset — any fuzziness would let a near-miss
+// produce a match against text the model didn't actually quote, which is
+// the same failure mode as trusting a raw offset, just one layer removed.
+function resolveAnchorPos(paragraph, anchorRaw) {
+  const anchor = typeof anchorRaw === 'string' ? anchorRaw.trim() : '';
+  if (!anchor) return paragraph.start; // no anchor supplied — today's fallback
+  const idx = paragraph.text.indexOf(anchor);
+  if (idx === -1) return paragraph.start; // paraphrased/hallucinated — fall back
+  return paragraph.start + idx + anchor.length;
+}
+
 // Validates raw placements against the actual paragraph list — NOT against
 // a raw character offset the model invented. The model is never asked for
 // charPos at all (see buildPrompt() below): it's shown text pre-split and
 // numbered into paragraphs ("[P1] ...", "[P2] ...") and asked only to name
-// which paragraph a note belongs to. This function's whole job is turning
-// that paragraphId back into the one real, exact charPos the code already
-// knows for that paragraph — a string-index lookup, not a guess — so a
-// note anchored to "paragraph 4" always lands at the actual start of
-// paragraph 4, never mid-word or in a neighboring paragraph.
+// which paragraph a note belongs to, plus (new) a short verbatim anchor
+// phrase within that paragraph. This function's whole job is turning that
+// paragraphId + anchor back into a real charPos the code derives itself —
+// a string-index lookup and a substring search, never a guess — so a note
+// anchored to "paragraph 4" lands within paragraph 4, at the specific spot
+// the model pointed to when it can be verified, or at that paragraph's
+// start when it can't.
 //
 // - paragraphId must match one of `paragraphs`' ids (as produced by
 //   splitIntoParagraphs()) exactly. Anything else (missing, misspelled,
@@ -150,6 +188,10 @@ function extractJsonArray(rawText) {
 //   position to clamp a bad id to, unlike the old charPos scheme where an
 //   off-by-a-little number could still be clamped safely.
 // - content must be a non-empty string after trimming.
+// - anchor is optional in this function's eyes (buildPrompt() asks for one
+//   on every entry, but a model that omits it shouldn't sink the whole
+//   placement) — see resolveAnchorPos() above for how a missing/unmatched
+//   anchor falls back to the paragraph start.
 // - At most ONE placement per paragraph is kept — the prompt asks for this,
 //   but a model that ignores it and returns two entries for the same
 //   paragraph shouldn't produce two overlapping notes; the first one in
@@ -158,10 +200,9 @@ function extractJsonArray(rawText) {
 // - §3 stricter check, unchanged in spirit from before: a resolved charPos
 //   landing *inside* an existing `[mn.*: ...]` marker's span is REJECTED,
 //   not clamped — there's no nearby "correct" position to clamp to that
-//   isn't itself a guess. This is now rare (paragraph starts essentially
-//   never sit inside a note marker) but kept as a backstop for the
-//   rare paragraph whose very first character was itself where a prior
-//   run inserted a note.
+//   isn't itself a guess. This now also covers the anchor-derived
+//   mid-paragraph position, not just paragraph starts, since an anchor can
+//   legitimately resolve to any offset inside the paragraph.
 // - This function never throws.
 function resolveParagraphPlacements(rawPlacements, paragraphs, existingSpans) {
   const spans = Array.isArray(existingSpans) ? existingSpans : [];
@@ -177,7 +218,7 @@ function resolveParagraphPlacements(rawPlacements, paragraphs, existingSpans) {
     const paragraph = byId.get(paragraphId);
     if (!paragraph) continue; // unknown/malformed id — nothing safe to clamp to
     if (seenIds.has(paragraphId)) continue; // one note per paragraph, first wins
-    const charPos = paragraph.start;
+    const charPos = resolveAnchorPos(paragraph, p.anchor);
     if (landsInsideExistingNote(charPos, spans)) {
       rejected++;
       continue;
@@ -259,16 +300,29 @@ function buildPrompt({ systemPrompt, chapterText }) {
     'you place a note \u2014 you never count characters or estimate a position',
     'yourself.',
     '',
-    'Decide which paragraphs need a note and what each should say. Respond',
-    'with ONLY a JSON array, no prose before or after it, no markdown code',
-    'fence, in exactly this shape:',
-    '[{"paragraphId": "<the P-number of the paragraph, exactly as tagged, e.g. \\"P3\\">", "content": "<note text>"}]',
+    'Decide which paragraphs need a note and what each should say. For each',
+    'note, also give a short "anchor" \u2014 2 to 4 words copied VERBATIM, exactly',
+    'as they appear (same spelling, capitalisation, and punctuation), from',
+    'inside that paragraph, at the specific point the note is actually',
+    'about. Do not paraphrase, summarise, or reconstruct the anchor from',
+    'memory \u2014 it must be an exact quote the app can find with a plain text',
+    'search, or the note will fall back to the top of the paragraph instead',
+    'of the spot you meant.',
+    '',
+    'Respond with ONLY a JSON array, no prose before or after it, no',
+    'markdown code fence, in exactly this shape:',
+    '[{"paragraphId": "<the P-number of the paragraph, exactly as tagged, e.g. \\"P3\\">", "anchor": "<2-4 words copied verbatim from inside that paragraph>", "content": "<note text>"}]',
     '',
     'Rules:',
     '- paragraphId must be copied exactly from one of the "[Pn]" tags shown',
-    '  \u2014 do not invent an id, and do not try to point at a specific word,',
-    '  sentence, or character within the paragraph; a note always applies',
-    '  to the whole paragraph it is tagged with.',
+    '  \u2014 do not invent an id; a note always applies to the whole paragraph',
+    '  it is tagged with, but the anchor tells the app which part of it to',
+    '  attach the note near.',
+    '- anchor must be a short, exact, verbatim substring of that paragraph\'s',
+    '  text \u2014 2 to 4 words, copied character-for-character from the point',
+    '  the note is about. If nothing in the paragraph needs a more specific',
+    '  spot, or you cannot quote it exactly, use the paragraph\'s own first',
+    '  few words as the anchor rather than paraphrasing.',
     '- At most ONE note per paragraph. If a paragraph has more than one',
     '  issue worth flagging, combine them into that paragraph\'s single note',
     '  (e.g. as short clauses or a semicolon-separated list) rather than',

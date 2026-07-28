@@ -48,3 +48,5 @@ electron/node_modules
 electron/dist
 electron/package-lock.json
 electron/build/icon.png
+package-lock.json
+book/_progress.json

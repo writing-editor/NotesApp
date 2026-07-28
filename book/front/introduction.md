@@ -4,10 +4,10 @@ this is a book[mn: this note] about politics[mn: gg]
 this is politics of hieghes order[mn: test]
 this is a book[mn: this note]  about politics 
 
-this is politijddjdfcs of hieghes[mn: test] order
+this is psychopolitics of hieghes[mn: test] order
 this is a book[mn: this note] about politics 
 
-this is politics of hieghes order[mn: test]
+this is politics of highsides order[mn: test]
 this is a book[mn: this noterr] about politics 
 
 this is politics of hieghes order[mn: note]

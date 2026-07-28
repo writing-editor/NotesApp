@@ -324,9 +324,21 @@ function createWindow() {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
+      // Chromium's built-in spellchecker. This is what actually underlines
+      // misspelled words in the editor (editor-src/main.js already sets
+      // `spellcheck: 'true'` on the CM6 content DOM, but that attribute is a
+      // no-op unless the webContents-level checker below is also on — the
+      // per-element attribute says "this element wants spellcheck," this
+      // setting says "the renderer HAS a spellchecker to give it"). Once
+      // it's on, right-clicking a misspelled word gives Chromium's own
+      // suggestion list via the context-menu handler below — no separate
+      // dictionary, tokenizer, or suggestion UI to build or ship.
+      spellcheck: true,
     },
   });
 
+  mainWindow.webContents.session.setSpellCheckerLanguages(['en-GB']);
+  
   mainWindow.loadURL(`http://127.0.0.1:${serverPort}/`);
 
   // Inject a slim draggable title-bar strip with min/max/close buttons once
@@ -500,6 +512,59 @@ function createWindow() {
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     shell.openExternal(url);
     return { action: 'deny' };
+  });
+
+  // ── Spell-check suggestions on right-click ───────────────────────────
+  // Electron/Chromium already know which word under the cursor is
+  // misspelled and what its suggestions are by the time a context-menu
+  // event fires (`params.misspelledWord` / `params.dictionarySuggestions`)
+  // — the `spellcheck: true` webPreference above is what makes Chromium
+  // compute those in the first place. This app disables the default
+  // context menu everywhere else (see buildMenu()'s comment on
+  // Menu.setApplicationMenu(null) — no menu bar, no default right-click
+  // menu either), so without this handler right-clicking a misspelled
+  // word in the editor does nothing at all. Building a *native* Menu here
+  // from those params is far less work than a custom in-page suggestion
+  // dropdown (livePreview.js/noteWidgets.js would both need to know about
+  // it) and gets the OS's own dictionary/suggestion quality for free.
+  mainWindow.webContents.on('context-menu', (event, params) => {
+    const template = [];
+
+    if (params.misspelledWord) {
+      if (params.dictionarySuggestions.length > 0) {
+        for (const suggestion of params.dictionarySuggestions) {
+          template.push({
+            label: suggestion,
+            click: () => mainWindow.webContents.replaceMisspelling(suggestion),
+          });
+        }
+      } else {
+        template.push({ label: 'No suggestions', enabled: false });
+      }
+      template.push({ type: 'separator' });
+      template.push({
+        label: 'Add to Dictionary',
+        click: () => mainWindow.webContents.session.addWordToSpellCheckerDictionary(params.misspelledWord),
+      });
+      template.push({ type: 'separator' });
+    }
+
+    // Standard edit items — Chromium's context menu normally includes
+    // these too, so keep them alongside the spelling suggestions above
+    // rather than leaving right-click as a spelling-only menu everywhere
+    // text is selected/editable.
+    if (params.isEditable) {
+      template.push(
+        { label: 'Cut', role: 'cut', enabled: params.editFlags.canCut },
+        { label: 'Copy', role: 'copy', enabled: params.editFlags.canCopy },
+        { label: 'Paste', role: 'paste', enabled: params.editFlags.canPaste },
+      );
+    } else if (params.selectionText) {
+      template.push({ label: 'Copy', role: 'copy' });
+    }
+
+    if (template.length === 0) return; // nothing editable/misspelled/selected — no custom menu to show
+    Menu.buildFromTemplate(template).popup({ window: mainWindow });
   });
 
   mainWindow.on('closed', () => {
