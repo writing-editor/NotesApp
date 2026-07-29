@@ -150,8 +150,18 @@
     .nav-section-add:hover { background: rgba(0,0,0,0.06); color: var(--accent); }
     .nav-section-add svg { width: 11px; height: 11px; }
 
+    /* Wraps a .nav-item together with its optional mobile-only download
+       button, so the row highlights/hovers as one unit while the button
+       stays a distinct tap target. */
+    .nav-item-row {
+      display: flex;
+      align-items: stretch;
+    }
+
     .nav-item {
       display: block;
+      flex: 1;
+      min-width: 0;
       padding: 0.45rem 1.2rem;
       font-family: var(--font-body);
       font-size: 0.85rem;
@@ -161,6 +171,9 @@
       border-left: 2px solid transparent;
       transition: background 0.12s, border-color 0.12s, color 0.12s;
       user-select: none;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
     }
 
     .nav-item:hover { background: rgba(0,0,0,0.04); color: var(--ink); }
@@ -170,6 +183,24 @@
       color: var(--accent);
       background: rgba(122,53,37,0.06);
     }
+
+    /* Mobile-only "save a copy to the device" button — the alternate
+       transfer path to git described in Section 5.2's sync plan. */
+    .nav-item-download {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 34px;
+      flex-shrink: 0;
+      border: none;
+      background: none;
+      color: var(--ink-faint);
+      cursor: pointer;
+      transition: background 0.12s, color 0.12s;
+    }
+    .nav-item-download:hover,
+    .nav-item-download:active { background: rgba(0,0,0,0.06); color: var(--accent); }
+    .nav-item-download svg { width: 14px; height: 14px; }
 
     /* ── Main area ── */
     .main {

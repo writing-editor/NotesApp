@@ -82,6 +82,49 @@ ws.onmessage = async e => {
   }
 };
 
+// ── Mobile file download (alternate transfer path to git) ───────────────────
+// The native app has no vault/filesystem access of its own and PDF export
+// isn't available on-device, which left git as the *only* way to get a note
+// off the phone — a single point of failure. This lets a person save any
+// individual markdown file straight to the device's Downloads via the OS
+// download manager, no git required.
+function isNativeMobile() {
+  return !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
+}
+
+async function downloadNoteFile(relPath, label) {
+  try {
+    const res = await fetch('/api/raw?path=' + encodeURIComponent(relPath));
+    if (!res.ok) throw new Error('Failed to fetch file');
+    const { raw } = await res.json();
+
+    const blob = new Blob([raw], { type: 'text/markdown;charset=utf-8' });
+    const url  = URL.createObjectURL(blob);
+
+    // Derive a safe filename from the path (last segment), falling back to
+    // the sidebar label if the path has no usable segment.
+    const baseName = (relPath.split('/').pop() || label || 'note').replace(/[\\/:*?"<>|]/g, '_');
+    const fileName = baseName.toLowerCase().endsWith('.md') ? baseName : `${baseName}.md`;
+
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = fileName;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+
+    setSaveStatus(`Saved ${fileName} to Downloads`);
+    if (savedStatusTimer) clearTimeout(savedStatusTimer);
+    savedStatusTimer = setTimeout(() => setSaveStatus(''), 2500);
+  } catch (err) {
+    console.error('Download failed:', err);
+    setSaveStatus('Download failed');
+    if (savedStatusTimer) clearTimeout(savedStatusTimer);
+    savedStatusTimer = setTimeout(() => setSaveStatus(''), 2500);
+  }
+}
+
 // ── Manifest & navigation ────────────────────────────────────────────────────
 // Rebuilds the sidebar from the current manifest, and returns the flat list
 // of valid paths plus the fetched data — but does NOT navigate anywhere.
@@ -129,6 +172,9 @@ async function renderManifestSidebar(data) {
     nav.appendChild(headRow);
 
     section.files.forEach(file => {
+      const row = document.createElement('div');
+      row.className = 'nav-item-row';
+
       const item = document.createElement('div');
       item.className = 'nav-item';
       item.textContent = file.label;
@@ -137,7 +183,25 @@ async function renderManifestSidebar(data) {
         loadChapter(file.path);
         closeSidebar();
       });
-      nav.appendChild(item);
+      row.appendChild(item);
+
+      // Mobile-only: an alternate transfer path to git. The native app has no
+      // vault/filesystem access and PDF export isn't available on-device, so
+      // git was the *only* way to get a file off the phone. This gives each
+      // markdown file its own "save a copy to the device" escape hatch.
+      if (isNativeMobile()) {
+        const dlBtn = document.createElement('button');
+        dlBtn.className = 'nav-item-download';
+        dlBtn.title = `Download ${file.label}`;
+        dlBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"></path><path d="M7 10l5 5 5-5"></path><path d="M5 21h14"></path></svg>';
+        dlBtn.addEventListener('click', (e) => {
+          e.stopPropagation(); // don't also trigger loadChapter()
+          downloadNoteFile(file.path, file.label);
+        });
+        row.appendChild(dlBtn);
+      }
+
+      nav.appendChild(row);
     });
   });
 
