@@ -130,11 +130,17 @@ async function handleApiRequest(req, url) {
       await rmrf(GIT_ROOT);
       await pfs.mkdir(GIT_ROOT).catch(() => {});
 
+      // NOTE: intentionally NOT a shallow clone (no `depth`). A depth:1 clone
+      // has no commit ancestry, so once the remote advances by more than one
+      // commit (e.g. new files pushed from the laptop), git.pull()'s merge
+      // step can't compute a proper merge base and throws a false "conflict"
+      // even when there is no real overlapping edit. Fetching full history
+      // avoids that entirely — see the matching note in lib/git-Sync.js.
       await git.clone({
         fs, http, dir: GIT_ROOT, url: remoteUrl,
         corsProxy: 'https://cors.isomorphic-git.org', // CapacitorHttp does not intercept Service Worker fetches
         onAuth: () => ({ username: token, password: 'x-oauth-basic' }),
-        singleBranch: true, depth: 1,
+        singleBranch: true,
       });
 
       let bookExists = false;

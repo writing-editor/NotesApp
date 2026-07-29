@@ -114,13 +114,18 @@ async function status({ dir }) {
 }
 
 // First-time clone. Used once per phone (Section 4.4).
+//
+// NOTE: intentionally NOT a shallow clone (no `depth`). A depth:1 clone has
+// no commit ancestry, so once the remote advances by more than one commit
+// (e.g. new files pushed from the laptop), git.pull()'s merge step can't
+// compute a proper merge base and throws a false "conflict" even when there
+// is no real overlapping edit. Fetching full history avoids that entirely.
 async function clone({ dir, remoteUrl, token }) {
   await git.clone({
     fs, http, dir,
     url: remoteUrl,
     onAuth: authCallback(token),
     singleBranch: true,
-    depth: 1,
   });
   return { ok: true };
 }

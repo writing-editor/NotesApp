@@ -122,6 +122,15 @@ jobs:
       - name: Overlay custom app icons
         run: cp -r mobile/icon-assets/. mobile/android/app/src/main/res/
 
+      # Disables Android WebView's own native HTTP cache (separate from,
+      # and underneath, the Service Worker's already-correct versioned
+      # cache — see mobile/scripts/patch-webview-cache.js for the full
+      # explanation). Must run after the Android project exists
+      # (cap add/sync above) and before the Gradle build.
+      - name: Disable WebView native HTTP cache
+        working-directory: mobile
+        run: node scripts/patch-webview-cache.js
+
       # Android only offers an in-place update (no uninstall required) when
       # the new APK has a HIGHER versionCode than what's installed AND is
       # signed with the SAME key. Without this step, every CI run left
