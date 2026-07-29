@@ -12,6 +12,7 @@ const { parseMd, countWords } = require('./lib/parse');
 const { generatePdf, isTypstAvailable } = require('./lib/typst');
 const gitSync = require('./lib/git-Sync');
 const aiProxy = require('./lib/ai-proxy');
+const { mirrorWrite } = require('./lib/backup-mirror');
 
 // ── Config & State ──────────────────────────────────────────────────────────
 let VAULT = process.argv[2] ? path.resolve(process.argv[2]) : null;
@@ -232,6 +233,7 @@ app.post('/api/agents/migrate-legacy-prompt', (req, res) => {
     if (!fs.existsSync(target)) {
       fs.mkdirSync(agentsDir, { recursive: true });
       fs.writeFileSync(target, content, 'utf8');
+      mirrorWrite(target, VAULT, GIT_ROOT);
     }
     res.json({ key: 'Custom' });
   } catch (e) {
@@ -250,6 +252,7 @@ function writeNote(filePath, charPos, noteText, noteType) {
   const tmp = filePath + '.tmp';
   fs.writeFileSync(tmp, updated, 'utf8');
   fs.renameSync(tmp, filePath);
+  mirrorWrite(filePath, VAULT, GIT_ROOT);
 }
 
 // deleteNote: find the [mn...] marker whose content matches noteId (1-based count),
@@ -286,6 +289,7 @@ function deleteNote(filePath, noteId, charPos) {
   const tmp = filePath + '.tmp';
   fs.writeFileSync(tmp, updated, 'utf8');
   fs.renameSync(tmp, filePath);
+  mirrorWrite(filePath, VAULT, GIT_ROOT);
 }
 
 // ── Routes ───────────────────────────────────────────────────────────────────
@@ -562,6 +566,7 @@ app.post('/api/chapter', (req, res) => {
 
     const initialContent = `# ${cleanTitle}\n\n`;
     fs.writeFileSync(full, initialContent, 'utf8');
+    mirrorWrite(full, VAULT, GIT_ROOT);
 
     const relPath = section + '/' + filename;
     // No autoCommit — new files are staged and only committed in bulk when
@@ -640,6 +645,7 @@ app.put('/api/raw', (req, res) => {
     const tmp = full + '.tmp';
     fs.writeFileSync(tmp, updated, 'utf8');
     fs.renameSync(tmp, full);
+    mirrorWrite(full, VAULT, GIT_ROOT);
     // No autoCommit — staged only; committed in bulk on Push (see
     // gitSync.push's internal commitAll call). Committing on every save
     // previously polluted git history with one commit per edit session.
@@ -725,6 +731,7 @@ app.patch('/api/note', (req, res) => {
     const tmp = full + '.tmp';
     fs.writeFileSync(tmp, updated, 'utf8');
     fs.renameSync(tmp, full);
+    mirrorWrite(full, VAULT, GIT_ROOT);
     // No autoCommit — staged only; committed in bulk on Push.
     res.json({ ok: true });
   } catch (e) {
