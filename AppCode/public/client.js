@@ -1867,11 +1867,43 @@ window.addEventListener('mn:notes-mutated', () => {
     // Try executing immediately
     setupFontSizeSlider();
 
+    // ── Text width (desktop only) ──
+    // Same pattern as the font-size slider above: persisted in localStorage,
+    // applied as a CSS variable (--reading-width) that .page-wrap's max-width
+    // in styles.css reads, and re-triggers positionChips() afterward since
+    // widening/narrowing the text column reflows paragraphs and moves every
+    // .mn-anchor the margin chips are aligned to.
+    function setupTextWidthSlider() {
+        const slider = document.getElementById('text-width-slider');
+        if (!slider) return;
+
+        const savedWidth = localStorage.getItem('reading-width') || '1180';
+        slider.value = savedWidth;
+
+        const applyWidth = (width) => {
+            document.documentElement.style.setProperty('--reading-width', `${width}px`);
+            requestAnimationFrame(() => {
+                if (typeof positionChips === 'function') positionChips();
+            });
+        };
+
+        applyWidth(savedWidth);
+
+        slider.addEventListener('input', (e) => {
+            const width = e.target.value;
+            applyWidth(width);
+            localStorage.setItem('reading-width', width);
+        });
+    }
+
+    setupTextWidthSlider();
+
     // Fallback if elements aren't parsed by the browser yet
     if (document.readyState === 'loading') {
         document.addEventListener('readystatechange', () => {
             if (document.readyState === 'interactive') {
                 setupFontSizeSlider();
+                setupTextWidthSlider();
             }
         });
     }

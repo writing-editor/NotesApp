@@ -4,7 +4,7 @@
   "webDir": "www",
   "plugins": {
     "CapacitorHttp": {
-      "enabled": true
+      "enabled": false
     },
     "StatusBar": {
       "overlaysWebView": false,

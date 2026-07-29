@@ -432,6 +432,16 @@ function createWindow() {
         border-bottom-left-radius: ${CORNER_R}px;
         border-bottom-right-radius: ${CORNER_R}px;
       }
+
+      /* .sidebar-expand-btn is positioned:fixed against the viewport in the
+         shared stylesheet, which is correct on mobile/web (no titlebar) but
+         in Electron put its top ~13px sitting underneath this titlebar strip
+         (height ${TITLEBAR_H}px, z-index 999999) — only the bottom sliver
+         poking out below the bar was actually visible/clickable. Shift it
+         down by the titlebar height so the whole button clears the bar. */
+      .sidebar-expand-btn {
+        top: calc(0.9rem + ${TITLEBAR_H}px) !important;
+      }
     `);
 
     mainWindow.webContents.executeJavaScript(`
@@ -494,12 +504,14 @@ function createWindow() {
       (function () {
         var bar = document.querySelector('.__desktop-titlebar');
         var appEl = document.querySelector('.app');
+        var expandBtn = document.querySelector('.sidebar-expand-btn');
         if (bar) bar.style.display = ${isFull} ? 'none' : '';
         if (appEl) {
           appEl.style.marginTop = ${isFull} ? '0px' : '';
           appEl.style.height = ${isFull} ? '100vh' : '';
           appEl.style.borderRadius = ${isFull} ? '0' : '';
         }
+        if (expandBtn) expandBtn.style.setProperty('top', ${isFull} ? '0.9rem' : '', ${isFull} ? 'important' : '');
         document.documentElement.style.borderRadius = ${isFull} ? '0' : '';
       })();
     `).catch(() => {});

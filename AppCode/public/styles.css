@@ -230,7 +230,10 @@
 
     /* ── Page layout ── */
     .page-wrap {
-      max-width: 1180px;
+      /* Driven by --reading-width (default 1180px), adjustable on desktop via
+         #text-width-slider — see the SEAMLESS FONT SIZE ADJUSTER block in
+         client.js for the sibling font-size slider this mirrors. */
+      max-width: var(--reading-width, 1180px);
       margin: 0 auto;
       padding: 1rem;
       display: grid;
@@ -971,6 +974,7 @@
       .page-wrap {
         grid-template-columns: 1fr;
         padding: 1.2rem 1rem 3rem;
+        max-width: none !important; /* text-width slider is desktop-only; never let a saved --reading-width value clip the mobile layout */
       }
 
       .page-wrap::after { display: none; }
@@ -1596,6 +1600,70 @@
 
 #font-size-slider::-moz-range-thumb:hover {
     transform: scale(1.05);
+}
+
+/* Text-width slider — same floating pill treatment as #font-size-slider,
+   placed just to its left. Desktop-only: on a phone-width viewport there's
+   no spare left/right margin to give back in the first place (.page-wrap
+   is already grid-template-columns: 1fr there), so the control would do
+   nothing but take up thumb space. */
+#text-width-slider {
+    display: none;
+    -webkit-appearance: none;
+    appearance: none;
+    position: fixed;
+    bottom: 24px;
+    left: 50%;
+    transform: translateX(calc(-50% - 170px));
+    width: 140px;
+    height: 4px;
+    background: #e2ded9;
+    border-radius: 2px;
+    outline: none;
+    opacity: 0.15;
+    transition: opacity 0.3s ease, background 0.3s ease;
+    z-index: 999;
+    cursor: pointer;
+}
+
+#text-width-slider:hover,
+#text-width-slider:focus,
+#text-width-slider:active {
+    opacity: 1.0;
+    background: #cdc8be;
+}
+
+#text-width-slider::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    background: #2d5a45; /* accent color, distinct from the font slider's thumb so the two are easy to tell apart at a glance */
+    border: none;
+    transition: transform 0.1s ease;
+}
+
+#text-width-slider::-webkit-slider-thumb:hover {
+    transform: scale(1.25);
+}
+
+#text-width-slider::-moz-range-thumb {
+    width: 8px;
+    height: 8px;
+    border: none;
+    border-radius: 50%;
+    background: #2d5a45;
+    cursor: pointer;
+    transition: transform 0.1s ease;
+}
+
+#text-width-slider::-moz-range-thumb:hover {
+    transform: scale(1.05);
+}
+
+@media (min-width: 769px) {
+    #text-width-slider { display: block; }
 }
 
 /* Target the correct elements used in your client.js renderChapter function */

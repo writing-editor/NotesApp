@@ -120,7 +120,34 @@ jobs:
           fi
 
       - name: Overlay custom app icons
-        run: cp -r mobile/icon-assets/. mobile/android/app/src/main/res/
+        working-directory: mobile
+        run: |
+          # cap add android scaffolds its own default launcher icon set —
+          # legacy PNGs (mipmap-*/ic_launcher*.png), the adaptive-icon
+          # vector drawables (drawable/ic_launcher_background.xml,
+          # drawable-v24/ic_launcher_foreground.xml), and the color it
+          # points at (values/ic_launcher_background.xml). A plain
+          # `cp -r icon-assets/. res/` only overwrites files that share an
+          # exact path with something in icon-assets — it never deletes
+          # anything, so these stock files were being left in place
+          # alongside ours. Harmless-looking on disk, but our
+          # ic_launcher.xml (mipmap-anydpi-v26) and the stock one both
+          # exist at the same path and one wins arbitrarily on overwrite,
+          # while the *stock* drawable/values files it might reference
+          # never went away — that's what was showing the default Android
+          # icon instead of ours. Delete every stock launcher-icon
+          # resource first so there is nothing left for ours to collide
+          # with or accidentally fall back to.
+          rm -f android/app/src/main/res/mipmap-*/ic_launcher*.png
+          rm -f android/app/src/main/res/mipmap-anydpi-v26/ic_launcher*.xml
+          rm -f android/app/src/main/res/drawable/ic_launcher_background.xml
+          rm -f android/app/src/main/res/drawable-v24/ic_launcher_foreground.xml
+          rm -f android/app/src/main/res/values/ic_launcher_background.xml
+          cp -r icon-assets/. android/app/src/main/res/
+
+      - name: Set app display name
+        working-directory: mobile
+        run: cp icon-assets/values/strings.xml android/app/src/main/res/values/strings.xml
 
       # Disables Android WebView's own native HTTP cache (separate from,
       # and underneath, the Service Worker's already-correct versioned
@@ -204,8 +231,17 @@ jobs:
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: ./gradlew assembleDebug
 
+      # Gradle always names its output app-debug.apk regardless of app
+      # name — that's a fixed Gradle convention, not something versionCode/
+      # versionName above affects. Rename to something recognizable before
+      # it's uploaded/downloaded, so it doesn't land in Downloads as
+      # "app-debug.apk" indistinguishable from any other Capacitor project's.
+      - name: Rename APK
+        working-directory: mobile/android/app/build/outputs/apk/debug
+        run: mv app-debug.apk ManuScript-1.0.${{ github.run_number }}.apk
+
       - name: Upload APK artifact
         uses: actions/upload-artifact@v6
         with:
           name: manuscript-debug-apk
-          path: mobile/android/app/build/outputs/apk/debug/app-debug.apk
+          path: mobile/android/app/build/outputs/apk/debug/ManuScript-1.0.${{ github.run_number }}.apk
