@@ -83,42 +83,6 @@ function main() {
   }
 
   console.log('[Sync] Verified: www/sw.js is the LightningFS mobile worker.');
-
-  // 5. Bundle the native Android API bridge (mobile/plugin/src/android-bridge.js).
-  //
-  // This is what index.html loads *instead of* registering sw.js when
-  // running under Capacitor on Android — see the isCapacitorAndroid check
-  // added to AppCode/public/index.html. It answers the exact same /api/*
-  // surface as sw.js, but backed by the native GitFs Capacitor plugin
-  // (real on-device files + JGit) rather than LightningFS/isomorphic-git,
-  // via a page-context fetch() interceptor rather than a Service Worker
-  // (a Service Worker cannot call a native Capacitor plugin — see the
-  // header comment in android-bridge.js for why).
-  //
-  // Both bundles ship in every build; only one is ever actually used per
-  // platform, decided at runtime by index.html's isCapacitorAndroid check.
-  // This keeps mobile-web/PWA-install and Electron/desktop completely
-  // unaffected — they still get sw.js exactly as before.
-  console.log('[Sync] Bundling native Android API bridge (android-bridge.js)...');
-  const PLUGIN_SRC = path.join(MOBILE_ROOT, 'plugin', 'src');
-  buildSync({
-    entryPoints: [path.join(PLUGIN_SRC, 'android-bridge.js')],
-    outfile: path.join(MOBILE_WWW, 'android-bridge.bundle.js'),
-    bundle: true,
-    minify: true,
-    format: 'esm',
-    platform: 'browser',
-    nodePaths: [path.join(MOBILE_ROOT, 'node_modules')],
-  });
-
-  const builtBridge = fs.readFileSync(path.join(MOBILE_WWW, 'android-bridge.bundle.js'), 'utf8');
-  if (!builtBridge.includes('/api/git/clone')) {
-    throw new Error(
-      '[Sync] FATAL: www/android-bridge.bundle.js does not implement /api/git/clone. Aborting build.'
-    );
-  }
-  console.log('[Sync] Verified: www/android-bridge.bundle.js implements the native GitFs API bridge.');
-
   console.log('[Sync] Mobile Web Native environment built successfully!');
 }
 

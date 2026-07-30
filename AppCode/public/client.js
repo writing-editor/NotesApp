@@ -1555,70 +1555,7 @@ window.addEventListener('mn:notes-mutated', () => {
     getStoredToken().then(t => { if (t) tokenInput.value = t; });
 
     refreshStatus();
-    refreshAndroidFsSection();
   }
-
-  // ── Android-only: real on-device folder path + export/import mirror ─────
-  // Only meaningful under Capacitor on Android (see android-bridge.js /
-  // GitFsPlugin.kt) — everywhere else this section stays hidden and these
-  // calls are simply never made.
-  const androidFsSection = document.getElementById('android-fs-section');
-  const androidFsPath    = document.getElementById('android-fs-path');
-  const androidFsExport  = document.getElementById('android-fs-export');
-  const androidFsImport  = document.getElementById('android-fs-import');
-
-  const isCapacitorAndroid = () => !!(
-    isNative() && window.Capacitor?.getPlatform && window.Capacitor.getPlatform() === 'android'
-  );
-
-  function refreshAndroidFsSection() {
-    if (!androidFsSection) return;
-    if (!isCapacitorAndroid()) {
-      androidFsSection.style.display = 'none';
-      return;
-    }
-    androidFsSection.style.display = '';
-    fetch('/api/fs/info').then(r => r.json()).then(info => {
-      if (androidFsPath) androidFsPath.textContent = info.humanPath || info.vault || '—';
-    }).catch(() => {
-      if (androidFsPath) androidFsPath.textContent = 'Unavailable';
-    });
-  }
-
-  androidFsExport && androidFsExport.addEventListener('click', async () => {
-    const label = androidFsExport.textContent;
-    androidFsExport.disabled = true;
-    androidFsExport.textContent = 'Choose a folder…';
-    try {
-      const res = await fetch('/api/fs/export', { method: 'POST' }).then(r => r.json());
-      androidFsExport.textContent = res.ok
-        ? `Copied ${res.filesCopied} file${res.filesCopied === 1 ? '' : 's'}`
-        : (res.error === 'cancelled' ? 'Cancelled' : `Failed: ${res.error || 'unknown error'}`);
-    } catch (e) {
-      androidFsExport.textContent = 'Failed: ' + e.message;
-    } finally {
-      setTimeout(() => { androidFsExport.textContent = label; androidFsExport.disabled = false; }, 2200);
-    }
-  });
-
-  androidFsImport && androidFsImport.addEventListener('click', async () => {
-    const label = androidFsImport.textContent;
-    androidFsImport.disabled = true;
-    androidFsImport.textContent = 'Choose a folder…';
-    try {
-      const res = await fetch('/api/fs/import', { method: 'POST' }).then(r => r.json());
-      androidFsImport.textContent = res.ok
-        ? `Imported ${res.filesCopied} file${res.filesCopied === 1 ? '' : 's'}`
-        : (res.error === 'cancelled' ? 'Cancelled' : `Failed: ${res.error || 'unknown error'}`);
-      // Imported files may include ones not currently shown — refresh the
-      // sidebar/manifest so a chapter added via import shows up immediately.
-      if (res.ok) window.location.reload();
-    } catch (e) {
-      androidFsImport.textContent = 'Failed: ' + e.message;
-    } finally {
-      setTimeout(() => { androidFsImport.textContent = label; androidFsImport.disabled = false; }, 2200);
-    }
-  });
 
   function closeSettings() {
     overlay.classList.remove('open');
