@@ -128,6 +128,33 @@ function main() {
     console.log('[PatchNative] app/build.gradle already depends on capacitor-gitfs — skipping.');
   }
 
+  // 5. app/build.gradle — exclude duplicate packaged resources from JGit.
+  //
+  // org.eclipse.jgit and org.eclipse.jgit.http.apache both ship an
+  // identical OSGI-INF/l10n/plugin.properties file (OSGi bundle metadata
+  // neither this app nor Capacitor's packaging step needs) — AGP's
+  // mergeDebugJavaResource task fails outright on any duplicate resource
+  // path across dependency jars unless it's told to exclude one. This
+  // patches app/build.gradle's `android {}` block with a `packaging {}`
+  // exclude for that specific path (and a couple of the other common
+  // OSGi/META-INF duplicates JGit's jars carry), rather than app/'s
+  // consumers needing to know JGit is even in the dependency graph at all.
+  if (!appGradle.includes('__GITFS_PACKAGING__')) {
+    appGradle = appGradle.replace(
+      /android\s*\{/,
+      `android {\n    // __GITFS_PACKAGING__\n` +
+      `    packaging {\n` +
+      `        resources {\n` +
+      `            excludes += ['OSGI-INF/l10n/plugin.properties', 'META-INF/DEPENDENCIES', 'META-INF/LICENSE.txt', 'META-INF/NOTICE.txt', 'about.html']\n` +
+      `        }\n` +
+      `    }`
+    );
+    fs.writeFileSync(APP_BUILD_GRADLE, appGradle, 'utf8');
+    console.log('[PatchNative] app/build.gradle: added packaging excludes for JGit duplicate resources.');
+  } else {
+    console.log('[PatchNative] app/build.gradle packaging excludes already present — skipping.');
+  }
+
   console.log('[PatchNative] Native GitFs plugin wired in successfully.');
 }
 
