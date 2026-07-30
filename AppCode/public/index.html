@@ -208,6 +208,29 @@
           <span id="export-pdf-settings-label">Download PDF</span>
         </button>
       </div>
+
+      <!-- Android-only: real on-device folder + optional mirror to any
+           SAF-picked folder (Obsidian, Syncthing, Downloads, etc). Hidden
+           everywhere else via JS (isNative() && platform === 'android') —
+           there is no real filesystem concept to show on the laptop/
+           Electron build (it already just uses your OS filesystem
+           directly) or on mobile-web (no native plugin bridge exists
+           there at all). See mobile/README-android-fs.md. -->
+      <div class="settings-section" id="android-fs-section" style="display:none;">
+        <label>Local folder (real files on this device)</label>
+        <div id="android-fs-path" style="font-family:var(--font-mono,monospace);font-size:0.72rem;color:var(--ink-faint);word-break:break-all;margin:0.3em 0 0.6em;">—</div>
+        <div class="sync-status-actions">
+          <button class="settings-btn" id="android-fs-export">Export copy to folder…</button>
+          <button class="settings-btn" id="android-fs-import">Import from folder…</button>
+        </div>
+        <small style="display:block;margin-top:0.5em;color:var(--ink-faint);">
+          Your book already lives in a real folder on this device (shown above) —
+          any file manager, USB file transfer, or Obsidian's own "open folder"
+          picker can reach it directly. Export/Import make an independent copy
+          in a second folder of your choice (e.g. a Syncthing folder), separate
+          from git.
+        </small>
+      </div>
     </div>
   </div>
 </div>
@@ -247,7 +270,31 @@
   //     check on their own schedule (roughly once every 24h), so an app
   //     resumed sooner than that could go a long time without ever
   //     noticing a new worker exists to activate in the first place.
-  if ('serviceWorker' in navigator) {
+  // Android now uses a real native filesystem + native git (JGit) via the
+  // GitFs Capacitor plugin instead of the old LightningFS-backed Service
+  // Worker — see mobile/README-android-fs.md for the full explanation.
+  // android-bridge.bundle.js installs a page-context fetch() interceptor
+  // that answers every /api/* call the same way sw.js used to, just backed
+  // by real files instead of an IndexedDB-backed virtual filesystem, so no
+  // Service Worker is registered on that platform at all. Every other
+  // platform (mobile-web/PWA install, Electron, plain browser) is
+  // completely unaffected and keeps using sw.js exactly as before.
+  const isCapacitorAndroid = !!(
+    window.Capacitor &&
+    window.Capacitor.isNativePlatform &&
+    window.Capacitor.isNativePlatform() &&
+    window.Capacitor.getPlatform &&
+    window.Capacitor.getPlatform() === 'android'
+  );
+
+  if (isCapacitorAndroid) {
+    const script = document.createElement('script');
+    script.type = 'module';
+    script.src = '/android-bridge.bundle.js';
+    script.onload = () => console.log('[index] native Android API bridge loaded');
+    script.onerror = (e) => console.error('[index] failed to load android-bridge.bundle.js', e);
+    document.head.appendChild(script);
+  } else if ('serviceWorker' in navigator) {
     let reloadedForUpdate = false;
     navigator.serviceWorker.addEventListener('controllerchange', () => {
       if (reloadedForUpdate) return; // guard against a stray double-fire

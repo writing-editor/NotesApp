@@ -743,12 +743,48 @@ app.patch('/api/note', (req, res) => {
 // Computed as a function so it always reflects the current VAULT, even after POST /api/vault changes it
 const progressFile = () => path.join(VAULT, '_progress.json');
 
+// Reads _progress.json off disk and normalises it to the current
+// per-file shape: { lastPath, files: { "<relPath>": { scrollTop, savedAt } } }.
+// Older versions of this app wrote a single flat record instead —
+// { path, scrollTop, savedAt } for whichever file was open last. That old
+// shape is migrated in-memory (never rewritten unless something POSTs)
+// so a vault last touched by an older build doesn't lose its one saved
+// position; it just becomes the seed entry for that one file going forward.
+function readProgressData() {
+  if (!fs.existsSync(progressFile())) return { lastPath: null, files: {} };
+  let raw;
+  try {
+    raw = JSON.parse(fs.readFileSync(progressFile(), 'utf8'));
+  } catch {
+    return { lastPath: null, files: {} };
+  }
+  if (raw && typeof raw === 'object' && raw.files && typeof raw.files === 'object') {
+    return { lastPath: raw.lastPath || null, files: raw.files };
+  }
+  // Legacy single-record shape — migrate it into the new one.
+  if (raw && raw.path) {
+    return {
+      lastPath: raw.path,
+      files: { [raw.path]: { scrollTop: raw.scrollTop || 0, savedAt: raw.savedAt || Date.now() } },
+    };
+  }
+  return { lastPath: null, files: {} };
+}
+
+// GET /api/progress
+//   - no ?path=      -> whole progress document: { lastPath, files: { path: { scrollTop, savedAt } } }
+//   - ?path=<relPath> -> just that file's saved position: { scrollTop, savedAt } or {} if none saved yet
+// The ?path= form is what loadChapter() calls on every chapter open (not
+// just at boot) so each file reopens exactly where it was left, not only
+// the single most-recently-viewed one.
 app.get('/api/progress', (req, res) => {
   if (!VAULT) return res.status(400).json({ error: 'No vault selected' });
-  if (!fs.existsSync(progressFile())) return res.json({});
-  try {
-    res.json(JSON.parse(fs.readFileSync(progressFile(), 'utf8')));
-  } catch { res.json({}); }
+  const data = readProgressData();
+  if (req.query.path) {
+    res.json(data.files[req.query.path] || {});
+  } else {
+    res.json(data);
+  }
 });
 
 app.post('/api/progress', (req, res) => {
@@ -756,7 +792,9 @@ app.post('/api/progress', (req, res) => {
   const { path: rel, scrollTop } = req.body;
   if (!rel) return res.status(400).json({ error: 'path required' });
   try {
-    const data = { path: rel, scrollTop: scrollTop || 0, savedAt: Date.now() };
+    const data = readProgressData();
+    data.lastPath = rel;
+    data.files[rel] = { scrollTop: scrollTop || 0, savedAt: Date.now() };
     fs.writeFileSync(progressFile(), JSON.stringify(data), 'utf8');
     res.json({ ok: true });
   } catch (e) {

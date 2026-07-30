@@ -398,20 +398,24 @@ async function handleApiRequest(req, url) {
       }
     }
 
-    // ── Reading progress ────────────────────────────────────────────────
+    // ── Reading progress — per file, not just the single last-opened one ──
+    // Shape: { lastPath, files: { "<relPath>": { scrollTop, savedAt } } }.
+    // Matches AppCode/server.js's readProgressData()/routes exactly,
+    // including migration of the old single-record { path, scrollTop,
+    // savedAt } shape a vault might still have on disk from an older build.
     if (path === '/api/progress' && method === 'GET') {
-      try {
-        const raw = await pfs.readFile(`${VAULT}/_progress.json`, 'utf8');
-        return jsonResponse(JSON.parse(raw));
-      } catch {
-        return jsonResponse({});
-      }
+      const data = await readProgressData();
+      const qPath = url.searchParams.get('path');
+      if (qPath) return jsonResponse(data.files[qPath] || {});
+      return jsonResponse(data);
     }
     if (path === '/api/progress' && method === 'POST') {
       const { path: relPath, scrollTop } = await req.json();
       if (!relPath) return jsonResponse({ error: 'path required' }, 400);
       try {
-        const data = { path: relPath, scrollTop: scrollTop || 0, savedAt: Date.now() };
+        const data = await readProgressData();
+        data.lastPath = relPath;
+        data.files[relPath] = { scrollTop: scrollTop || 0, savedAt: Date.now() };
         await pfs.writeFile(`${VAULT}/_progress.json`, JSON.stringify(data), 'utf8');
         return jsonResponse({ ok: true });
       } catch (e) {
@@ -432,6 +436,29 @@ async function handleApiRequest(req, url) {
     console.error('[mobile-sw] error handling', method, path, error);
     return jsonResponse({ error: error.message }, 500);
   }
+}
+
+// ── Reading progress storage — mirrors server.js readProgressData() ─────
+// Normalises _progress.json to { lastPath, files: { path: {scrollTop,
+// savedAt} } }, migrating the old single-record { path, scrollTop,
+// savedAt } shape in-memory if that's what's still on disk.
+async function readProgressData() {
+  let raw;
+  try {
+    raw = JSON.parse(await pfs.readFile(`${VAULT}/_progress.json`, 'utf8'));
+  } catch {
+    return { lastPath: null, files: {} };
+  }
+  if (raw && typeof raw === 'object' && raw.files && typeof raw.files === 'object') {
+    return { lastPath: raw.lastPath || null, files: raw.files };
+  }
+  if (raw && raw.path) {
+    return {
+      lastPath: raw.path,
+      files: { [raw.path]: { scrollTop: raw.scrollTop || 0, savedAt: raw.savedAt || Date.now() } },
+    };
+  }
+  return { lastPath: null, files: {} };
 }
 
 // ── Manifest builder (mirrors server.js buildManifest/readMeta) ─────────

@@ -215,20 +215,20 @@ async function loadManifest(isRetry = false) {
     return;
   }
 
-  // Restore last reading position — only if the saved path is still valid
+  // Restore last reading position — only if the saved path is still valid.
+  // Progress is now tracked per file (prog.files[path] -> {scrollTop,
+  // savedAt}), not just for whichever file happened to be open last — see
+  // loadChapter() below, which looks up and applies this same per-file
+  // entry every time *any* chapter is opened, not only at boot.
   try {
     const prog = await fetch('/api/progress').then(r => r.json());
-    if (prog.path) {
-      // Normalise separators before comparing
-      const savedPath = prog.path;
+    if (prog.lastPath) {
+      const savedPath = prog.lastPath;
       if (allPaths.includes(savedPath)) {
+        // loadChapter() itself looks up prog.files[savedPath] and applies
+        // the scroll position — no separate setTimeout/scrollTop dance
+        // needed here anymore now that every chapter load does this.
         await loadChapter(savedPath);
-        if (prog.scrollTop) {
-          setTimeout(() => {
-            const main = document.getElementById('main');
-            if (main) main.scrollTop = prog.scrollTop;
-          }, 120);
-        }
         return;
       }
       // Saved path no longer valid — clear it so we don't hit this next time
@@ -266,15 +266,31 @@ async function loadChapter(relPath, updateNav = true) {
     detail: { path: relPath, label: document.getElementById('topbar-chapter')?.textContent || relPath },
   }));
 
-  // Persist immediately on navigation — previously progress was only ever
-  // saved from the scroll listener, so switching chapters without scrolling
-  // (or closing the app right after opening a chapter) never recorded the
-  // new path at all. scrollTop is 0 here since we haven't rendered yet;
-  // the scroll listener will update it once the reader actually scrolls.
+  // Look up this specific file's own saved scroll position *before*
+  // touching progress.json — the POST just below updates lastPath (so boot
+  // knows what to reopen) without disturbing this file's own scrollTop
+  // entry, which renderChapter() applies once the content is actually on
+  // screen. Every chapter open does this now, not only the very first one
+  // at app boot, so switching between chapters and back returns you to
+  // where you left off on each one individually.
+  let savedScrollTop = 0;
+  try {
+    const prog = await fetch('/api/progress?path=' + encodeURIComponent(relPath)).then(r => r.json());
+    savedScrollTop = prog.scrollTop || 0;
+  } catch { /* offline or first-ever open of this file — start at top */ }
+
+  // Persist lastPath immediately on navigation — previously progress was
+  // only ever saved from the scroll listener, so switching chapters without
+  // scrolling (or closing the app right after opening a chapter) never
+  // recorded the new path at all. This intentionally does NOT reset this
+  // file's own scrollTop to 0 (that would erase the position we just read
+  // above) — the scroll listener updates scrollTop for *this* file once the
+  // reader actually scrolls; here we're only ever updating which file is
+  // "last opened" for the next boot.
   fetch('/api/progress', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ path: relPath, scrollTop: 0 }),
+    body: JSON.stringify({ path: relPath, scrollTop: savedScrollTop }),
   }).catch(() => {});
 
   const wrap = document.getElementById('page-wrap');
@@ -291,13 +307,13 @@ async function loadChapter(relPath, updateNav = true) {
     }
     const data = await res.json(); // { raw, words, chars }
     _lastRenderedRaw = data.raw;
-    renderChapter(data, relPath);
+    renderChapter(data, relPath, savedScrollTop);
   } catch (e) {
     wrap.innerHTML = `<div class="state-msg" style="color:#c0392b;">Network error: ${e.message}</div>`;
   }
 }
 
-function renderChapter(data, relPath) {
+function renderChapter(data, relPath, savedScrollTop = 0) {
   const wrap = document.getElementById('page-wrap');
 
   // Derive title from the first ATX h1 in the raw markdown
@@ -321,6 +337,19 @@ function renderChapter(data, relPath) {
   mountLiveEditor(data.raw, relPath);
   buildScrollbarTOC();
   setupProgressSave();
+
+  // Jump to this file's own last-read position. Deferred a tick (same
+  // 120ms margin the old boot-only restore used) so it runs after the
+  // editor/TOC have actually laid out content and #main has a real
+  // scrollHeight to scroll within — applying scrollTop immediately after
+  // innerHTML is set can land on 0 in some browsers because layout hasn't
+  // happened yet.
+  if (savedScrollTop) {
+    setTimeout(() => {
+      const main = document.getElementById('main');
+      if (main) main.scrollTop = savedScrollTop;
+    }, 120);
+  }
 }
 
 // ── Silent refresh — reload the doc without a scroll jump or blink ──────────
@@ -1511,7 +1540,70 @@ window.addEventListener('mn:notes-mutated', () => {
     getStoredToken().then(t => { if (t) tokenInput.value = t; });
 
     refreshStatus();
+    refreshAndroidFsSection();
   }
+
+  // ── Android-only: real on-device folder path + export/import mirror ─────
+  // Only meaningful under Capacitor on Android (see android-bridge.js /
+  // GitFsPlugin.kt) — everywhere else this section stays hidden and these
+  // calls are simply never made.
+  const androidFsSection = document.getElementById('android-fs-section');
+  const androidFsPath    = document.getElementById('android-fs-path');
+  const androidFsExport  = document.getElementById('android-fs-export');
+  const androidFsImport  = document.getElementById('android-fs-import');
+
+  const isCapacitorAndroid = () => !!(
+    isNative() && window.Capacitor?.getPlatform && window.Capacitor.getPlatform() === 'android'
+  );
+
+  function refreshAndroidFsSection() {
+    if (!androidFsSection) return;
+    if (!isCapacitorAndroid()) {
+      androidFsSection.style.display = 'none';
+      return;
+    }
+    androidFsSection.style.display = '';
+    fetch('/api/fs/info').then(r => r.json()).then(info => {
+      if (androidFsPath) androidFsPath.textContent = info.humanPath || info.vault || '—';
+    }).catch(() => {
+      if (androidFsPath) androidFsPath.textContent = 'Unavailable';
+    });
+  }
+
+  androidFsExport && androidFsExport.addEventListener('click', async () => {
+    const label = androidFsExport.textContent;
+    androidFsExport.disabled = true;
+    androidFsExport.textContent = 'Choose a folder…';
+    try {
+      const res = await fetch('/api/fs/export', { method: 'POST' }).then(r => r.json());
+      androidFsExport.textContent = res.ok
+        ? `Copied ${res.filesCopied} file${res.filesCopied === 1 ? '' : 's'}`
+        : (res.error === 'cancelled' ? 'Cancelled' : `Failed: ${res.error || 'unknown error'}`);
+    } catch (e) {
+      androidFsExport.textContent = 'Failed: ' + e.message;
+    } finally {
+      setTimeout(() => { androidFsExport.textContent = label; androidFsExport.disabled = false; }, 2200);
+    }
+  });
+
+  androidFsImport && androidFsImport.addEventListener('click', async () => {
+    const label = androidFsImport.textContent;
+    androidFsImport.disabled = true;
+    androidFsImport.textContent = 'Choose a folder…';
+    try {
+      const res = await fetch('/api/fs/import', { method: 'POST' }).then(r => r.json());
+      androidFsImport.textContent = res.ok
+        ? `Imported ${res.filesCopied} file${res.filesCopied === 1 ? '' : 's'}`
+        : (res.error === 'cancelled' ? 'Cancelled' : `Failed: ${res.error || 'unknown error'}`);
+      // Imported files may include ones not currently shown — refresh the
+      // sidebar/manifest so a chapter added via import shows up immediately.
+      if (res.ok) window.location.reload();
+    } catch (e) {
+      androidFsImport.textContent = 'Failed: ' + e.message;
+    } finally {
+      setTimeout(() => { androidFsImport.textContent = label; androidFsImport.disabled = false; }, 2200);
+    }
+  });
 
   function closeSettings() {
     overlay.classList.remove('open');

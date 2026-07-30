@@ -119,6 +119,22 @@ jobs:
             npx cap sync android
           fi
 
+      # Wires the native GitFs Capacitor plugin (mobile/plugin/android/) into
+      # the just-generated project as its own Gradle module: copies the
+      # plugin's Kotlin/Gradle source into android/capacitor-gitfs/, adds
+      # the Kotlin Gradle plugin classpath to the root build.gradle (the
+      # stock Capacitor template is pure Java and has none), and wires the
+      # module into settings.gradle + app/build.gradle's dependencies.
+      # Must run after cap add/sync android (those directories don't exist
+      # before that) and before Gradle actually builds anything. See
+      # mobile/scripts/patch-android-native.js and
+      # mobile/README-android-fs.md for the full explanation of why this
+      # plugin exists and why it's injected this way rather than shipped as
+      # a normal npm-installed Capacitor plugin.
+      - name: Inject native GitFs plugin (real filesystem + JGit)
+        working-directory: mobile
+        run: node scripts/patch-android-native.js
+
       - name: Overlay custom app icons
         working-directory: mobile
         run: |
