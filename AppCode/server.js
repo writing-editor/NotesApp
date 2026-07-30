@@ -789,12 +789,18 @@ app.get('/api/progress', (req, res) => {
 
 app.post('/api/progress', (req, res) => {
   if (!VAULT) return res.status(400).json({ error: 'No vault selected' });
-  const { path: rel, scrollTop } = req.body;
+  const { path: rel, scrollTop, fontSize, textWidth } = req.body;
   if (!rel) return res.status(400).json({ error: 'path required' });
   try {
     const data = readProgressData();
     data.lastPath = rel;
-    data.files[rel] = { scrollTop: scrollTop || 0, savedAt: Date.now() };
+    const existing = data.files[rel] || {};
+    data.files[rel] = {
+      scrollTop: scrollTop !== undefined ? scrollTop : (existing.scrollTop || 0),
+      fontSize: fontSize !== undefined ? fontSize : (existing.fontSize || null),
+      textWidth: textWidth !== undefined ? textWidth : (existing.textWidth || null),
+      savedAt: Date.now(),
+    };
     fs.writeFileSync(progressFile(), JSON.stringify(data), 'utf8');
     res.json({ ok: true });
   } catch (e) {

@@ -410,12 +410,18 @@ async function handleApiRequest(req, url) {
       return jsonResponse(data);
     }
     if (path === '/api/progress' && method === 'POST') {
-      const { path: relPath, scrollTop } = await req.json();
+      const { path: relPath, scrollTop, fontSize, textWidth } = await req.json();
       if (!relPath) return jsonResponse({ error: 'path required' }, 400);
       try {
         const data = await readProgressData();
         data.lastPath = relPath;
-        data.files[relPath] = { scrollTop: scrollTop || 0, savedAt: Date.now() };
+        const existing = data.files[relPath] || {};
+        data.files[relPath] = {
+          scrollTop: scrollTop !== undefined ? scrollTop : (existing.scrollTop || 0),
+          fontSize: fontSize !== undefined ? fontSize : (existing.fontSize || null),
+          textWidth: textWidth !== undefined ? textWidth : (existing.textWidth || null),
+          savedAt: Date.now(),
+        };
         await pfs.writeFile(`${VAULT}/_progress.json`, JSON.stringify(data), 'utf8');
         return jsonResponse({ ok: true });
       } catch (e) {

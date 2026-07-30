@@ -47,9 +47,9 @@ import java.io.File
  *
  * JS talks to this plugin through `mobile/plugin/src/index.ts`
  * (`GitFs.*`), which `AppCode-android-bridge.js` wraps behind the *same*
- * fetch()-shaped `/api/*` surface the rest of the app (client.js) already
+ * fetch()-shaped "/api/..." surface the rest of the app (client.js) already
  * calls — so client.js itself needed no route-shape changes, only a swap
- * of which script intercepts /api/* on Android (see mobile/README-android-fs.md).
+ * of which script intercepts "/api/..." requests on Android (see mobile/README-android-fs.md).
  */
 @CapacitorPlugin(name = "GitFs")
 class GitFsPlugin : Plugin() {

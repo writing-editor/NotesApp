@@ -267,30 +267,39 @@ async function loadChapter(relPath, updateNav = true) {
   }));
 
   // Look up this specific file's own saved scroll position *before*
-  // touching progress.json — the POST just below updates lastPath (so boot
-  // knows what to reopen) without disturbing this file's own scrollTop
-  // entry, which renderChapter() applies once the content is actually on
-  // screen. Every chapter open does this now, not only the very first one
-  // at app boot, so switching between chapters and back returns you to
-  // where you left off on each one individually.
+  // Look up this specific file's own saved scroll position, font size, and
+  // text width *before* touching progress.json — the POST just below
+  // updates lastPath (so boot knows what to reopen) without disturbing
+  // this file's own saved entry, which renderChapter() applies once the
+  // content is actually on screen. Every chapter open does this now, not
+  // only the very first one at app boot, so switching between chapters and
+  // back returns each one to its own scroll position *and* its own
+  // font-size/text-width preference, not just a single global one.
   let savedScrollTop = 0;
+  let savedFontSize = null;
+  let savedTextWidth = null;
   try {
     const prog = await fetch('/api/progress?path=' + encodeURIComponent(relPath)).then(r => r.json());
     savedScrollTop = prog.scrollTop || 0;
-  } catch { /* offline or first-ever open of this file — start at top */ }
+    savedFontSize = prog.fontSize || null;
+    savedTextWidth = prog.textWidth || null;
+  } catch { /* offline or first-ever open of this file — start at top, use current global defaults */ }
 
   // Persist lastPath immediately on navigation — previously progress was
   // only ever saved from the scroll listener, so switching chapters without
   // scrolling (or closing the app right after opening a chapter) never
   // recorded the new path at all. This intentionally does NOT reset this
-  // file's own scrollTop to 0 (that would erase the position we just read
-  // above) — the scroll listener updates scrollTop for *this* file once the
-  // reader actually scrolls; here we're only ever updating which file is
-  // "last opened" for the next boot.
+  // file's own scrollTop/fontSize/textWidth (that would erase the values
+  // we just read above) — the scroll listener and the two sliders each
+  // update their own field for *this* file once the reader actually
+  // scrolls or adjusts a slider; here we're only ever updating which file
+  // is "last opened" for the next boot.
   fetch('/api/progress', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ path: relPath, scrollTop: savedScrollTop }),
+    body: JSON.stringify({
+      path: relPath, scrollTop: savedScrollTop, fontSize: savedFontSize, textWidth: savedTextWidth,
+    }),
   }).catch(() => {});
 
   const wrap = document.getElementById('page-wrap');
@@ -308,6 +317,12 @@ async function loadChapter(relPath, updateNav = true) {
     const data = await res.json(); // { raw, words, chars }
     _lastRenderedRaw = data.raw;
     renderChapter(data, relPath, savedScrollTop);
+    // Applies this file's own saved font-size/text-width (or, if this file
+    // has never had one saved, leaves whatever's currently active alone —
+    // see applyPerFileReaderPrefs's own fallback behavior below).
+    if (typeof applyPerFileReaderPrefs === 'function') {
+      applyPerFileReaderPrefs(savedFontSize, savedTextWidth);
+    }
   } catch (e) {
     wrap.innerHTML = `<div class="state-msg" style="color:#c0392b;">Network error: ${e.message}</div>`;
   }
@@ -1926,70 +1941,110 @@ window.addEventListener('mn:notes-mutated', () => {
 })();
 
 // ==========================================
-// SEAMLESS FONT SIZE ADJUSTER
+// SEAMLESS FONT SIZE + TEXT WIDTH ADJUSTER — per file
 // ==========================================
+// Both sliders used to be purely global (one value in localStorage,
+// applied to every file identically). They're now saved per file inside
+// _progress.json alongside scrollTop, and applied automatically whenever
+// that file is opened — so a dense reference chapter and a chapter you
+// read on a phone one-handed can each keep their own comfortable size and
+// column width. localStorage still holds the *default* used the very
+// first time any given file is opened (before it has a saved preference
+// of its own), so behavior for brand-new files matches what the sliders
+// used to do globally.
+let _applyingPerFileReaderPrefs = false; // guards against feedback into currentPath's own saved values while we're the ones applying them
+
+function applyPerFileReaderPrefs(savedFontSize, savedTextWidth) {
+  const fontSlider = document.getElementById('font-size-slider');
+  const widthSlider = document.getElementById('text-width-slider');
+
+  _applyingPerFileReaderPrefs = true;
+  try {
+    const size = savedFontSize || localStorage.getItem('reader-font-size') || '17';
+    document.documentElement.style.setProperty('--reader-font-size', `${size}px`);
+    if (fontSlider) fontSlider.value = size;
+
+    const width = savedTextWidth || localStorage.getItem('reading-width') || '1180';
+    document.documentElement.style.setProperty('--reading-width', `${width}px`);
+    if (widthSlider) widthSlider.value = width;
+
+    // Changing either reflows every paragraph's height/column, which moves
+    // every .mn-anchor in the text — margin chips must be recomputed or
+    // they drift out of alignment with their line.
+    requestAnimationFrame(() => {
+      if (typeof positionChips === 'function') positionChips();
+    });
+  } finally {
+    _applyingPerFileReaderPrefs = false;
+  }
+}
+
+// Saves a single field (fontSize or textWidth) into the *currently open*
+// file's progress entry, leaving its other saved fields (scrollTop, the
+// other of the two) untouched — mirrors the same read-then-merge pattern
+// loadChapter() already uses for scrollTop.
+async function saveReaderPrefForCurrentFile(field, value) {
+  if (_applyingPerFileReaderPrefs || !currentPath) return;
+  try {
+    const prog = await fetch('/api/progress?path=' + encodeURIComponent(currentPath)).then(r => r.json());
+    await fetch('/api/progress', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        path: currentPath,
+        scrollTop: prog.scrollTop || 0,
+        fontSize: field === 'fontSize' ? value : (prog.fontSize || null),
+        textWidth: field === 'textWidth' ? value : (prog.textWidth || null),
+      }),
+    });
+  } catch { /* offline — the slider still applied visually via the CSS var; just doesn't persist this change */ }
+}
+
 (function() {
     function setupFontSizeSlider() {
         const slider = document.getElementById('font-size-slider');
         if (!slider) return;
 
-        // Retrieve saved choice or default to 17px
+        // Retrieve saved global default or fall back to 17px — only used
+        // until the currently open file gets its own saved value the
+        // moment this slider is first touched, or if it already has one
+        // from a previous session (applied by applyPerFileReaderPrefs via
+        // loadChapter(), which runs before this default matters).
         const savedSize = localStorage.getItem('reader-font-size') || '17';
         slider.value = savedSize;
-        
-        // Apply variable to the root HTML tag so it persists across chapter loads
-        const applyFontSize = (size) => {
+        document.documentElement.style.setProperty('--reader-font-size', `${savedSize}px`);
+
+        slider.addEventListener('input', (e) => {
+            const size = e.target.value;
             document.documentElement.style.setProperty('--reader-font-size', `${size}px`);
-            // Changing the font size reflows every paragraph's height, which
-            // moves every .mn-anchor in the text — margin chips must be
-            // recomputed or they drift out of alignment with their line.
-            // Wait a frame so the browser has applied the new font-size and
-            // reflowed layout before we re-measure anchor positions.
             requestAnimationFrame(() => {
                 if (typeof positionChips === 'function') positionChips();
             });
-        };
-
-        // Set on load
-        applyFontSize(savedSize);
-
-        // Listen for adjustments
-        slider.addEventListener('input', (e) => {
-            const size = e.target.value;
-            applyFontSize(size);
-            localStorage.setItem('reader-font-size', size);
+            localStorage.setItem('reader-font-size', size); // default for files with no saved value yet
+            saveReaderPrefForCurrentFile('fontSize', size); // this file's own value
         });
     }
 
-    // Try executing immediately
     setupFontSizeSlider();
 
     // ── Text width (desktop only) ──
-    // Same pattern as the font-size slider above: persisted in localStorage,
-    // applied as a CSS variable (--reading-width) that .page-wrap's max-width
-    // in styles.css reads, and re-triggers positionChips() afterward since
-    // widening/narrowing the text column reflows paragraphs and moves every
-    // .mn-anchor the margin chips are aligned to.
+    // Same per-file pattern as the font-size slider above.
     function setupTextWidthSlider() {
         const slider = document.getElementById('text-width-slider');
         if (!slider) return;
 
         const savedWidth = localStorage.getItem('reading-width') || '1180';
         slider.value = savedWidth;
+        document.documentElement.style.setProperty('--reading-width', `${savedWidth}px`);
 
-        const applyWidth = (width) => {
+        slider.addEventListener('input', (e) => {
+            const width = e.target.value;
             document.documentElement.style.setProperty('--reading-width', `${width}px`);
             requestAnimationFrame(() => {
                 if (typeof positionChips === 'function') positionChips();
             });
-        };
-
-        applyWidth(savedWidth);
-
-        slider.addEventListener('input', (e) => {
-            const width = e.target.value;
-            applyWidth(width);
-            localStorage.setItem('reading-width', width);
+            localStorage.setItem('reading-width', width); // default for files with no saved value yet
+            saveReaderPrefForCurrentFile('textWidth', width); // this file's own value
         });
     }
 
