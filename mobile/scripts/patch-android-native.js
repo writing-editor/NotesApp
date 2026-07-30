@@ -100,7 +100,7 @@ function main() {
   if (!settings.includes(MARKER)) {
     settings += `\n${MARKER}\n` +
       `include ':capacitor-gitfs'\n` +
-      `project(':capacitor-gitfs').projectDir = new File('../capacitor-gitfs')\n`;
+      `project(':capacitor-gitfs').projectDir = new File('./capacitor-gitfs')\n`;
     fs.writeFileSync(SETTINGS_GRADLE, settings, 'utf8');
     console.log('[PatchNative] settings.gradle: added capacitor-gitfs module include.');
   } else {
